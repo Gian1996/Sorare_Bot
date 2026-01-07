@@ -1,0 +1,15 @@
+# File di configurazione segreto
+.env
+
+# File temporanei di Python
+__pycache__/
+old_version/
+*.py[cod]
+*$py.class
+
+# Ambiente virtuale (se ne usi uno)
+venv/
+sorare/
+
+# Altri file di sistema
+.DS_Store
