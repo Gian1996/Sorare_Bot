@@ -57,24 +57,20 @@ Requisiti
 Installazione e Avvio
 
 Clona il repository
-    Bash
 
     git clone https://github.com/tuo-username/Sorare_Bot.git
     cd Sorare_Bot/script
 
 Installa le dipendenze
-    Bash
 
     pip install -r requirements.txt
 
 Configura l'ambiente Crea un file .env nella cartella principale e inserisci i tuoi dati:
-    Plaintext
 
     TELEGRAM_TOKEN=il_tuo_token
     CHAT_ID=il_tuo_chat_id
 
 Avvia il bot
-    Bash
 
     python main.py
 
