@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 # Carica le variabili dal file .env
-load_dotenv() # TELEGRAM & SORARE AUTH 
+load_dotenv() # TELEGRAM & SORARE AUTH  
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 

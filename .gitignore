@@ -4,6 +4,7 @@
 # File temporanei di Python
 __pycache__/
 old_version/
+sorare_memory.json 
 *.py[cod]
 *$py.class
 
