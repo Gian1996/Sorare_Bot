@@ -36,23 +36,23 @@ Tutti i calcoli e le notifiche vengono mostrati in Euro.
 
 Architettura del Progetto
 
-main.py: Punto di ingresso del programma. Gestisce il loop principale di scansione.
+- main.py: Punto di ingresso del programma. Gestisce il loop principale di scansione.
 
-api.py: Gestisce le chiamate GraphQL verso Sorare (autenticazione, query mercato e rose).
+- api.py: Gestisce le chiamate GraphQL verso Sorare (autenticazione, query mercato e rose).
 
-utils.py: Contiene la logica per il calcolo delle medie, la gestione dei messaggi Telegram e dei tassi di cambio.
+- utils.py: Contiene la logica per il calcolo delle medie, la gestione dei messaggi Telegram e dei tassi di cambio.
 
-config.py: Gestisce il caricamento delle credenziali e dei parametri di trading.
+- config.py: Gestisce il caricamento delle credenziali e dei parametri di trading.
 
-watchlists.py: Permette l'aggiunta manuale di giocatori specifici.
+- watchlists.py: Permette l'aggiunta manuale di giocatori specifici.
 
 Requisiti
 
-Python 3.8 o superiore
+- Python 3.8 o superiore
 
-Token del Bot Telegram e Chat ID
+- Token del Bot Telegram e Chat ID
 
-Account Sorare (Email/Password o Token API)
+- Account Sorare (Email/Password o Token API)
 
 Installazione e Avvio
 
