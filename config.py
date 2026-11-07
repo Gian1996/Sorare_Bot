@@ -39,7 +39,14 @@ DRY_RUN = _env_bool("DRY_RUN", default=False)
 
 # --- COSA MONITORARE ----------------------------------------------------------
 # Slug Sorare dei campionati: il bot prende da solo tutte le squadre e le rose.
-COMPETITIONS = ["primeira-liga-pt"]  # Liga Portugal
+# "Champion" di Sorare = i 5 top campionati europei. Altri esempi: "primeira-liga-pt" (Liga Portugal).
+COMPETITIONS = [
+    "serie-a-it",             # Serie A
+    "premier-league-gb-eng",  # Premier League
+    "laliga-es",              # LaLiga
+    "bundesliga-de",          # Bundesliga
+    "ligue-1-fr",             # Ligue 1
+]
 
 # Rarità da monitorare: "limited", "rare", "super_rare", "unique".
 RARITIES = ["limited"]

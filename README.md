@@ -4,7 +4,7 @@ Bot Telegram che controlla il mercato di Sorare e ti avvisa quando qualcuno mett
 
 ## Come funziona
 
-1. **Giocatori**: per ogni campionato in `config.COMPETITIONS` (di default la Liga Portugal, `primeira-liga-pt`) scarica tutte le squadre e le loro rose. Si aggiornano da sole ogni 24 ore. Altri giocatori si possono aggiungere in `watchlists.py`.
+1. **Giocatori**: per ogni campionato in `config.COMPETITIONS` (di default i 5 campionati "Champion": Serie A, Premier League, LaLiga, Bundesliga, Ligue 1) scarica tutte le squadre e le loro rose. Si aggiornano da sole ogni 24 ore. Altri giocatori si possono aggiungere in `watchlists.py`.
 2. **Prezzo di riferimento**: per ogni giocatore calcola la **mediana** delle vendite Classic degli ultimi 30 giorni. Se le vendite sono meno di 5, usa gli ultimi 90 giorni. La mediana non si fa ingannare dalle poche vendite fuori mercato (numeri di maglia, #1...). Si ricalcola ogni 24 ore.
 3. **Mercato**: ogni 60 secondi legge tutte le nuove offerte di vendita su Sorare. Tiene solo quelle Classic, della rarità scelta, di giocatori monitorati.
 4. **Notifica**: se il prezzo è almeno il 20% sotto la mediana **e** costa almeno 1 € in meno, manda un messaggio Telegram con il link alla carta. Ogni offerta viene notificata una volta sola, anche dopo un riavvio.
@@ -34,7 +34,7 @@ python main.py
 
 | Impostazione | Default | Cosa fa |
 |---|---|---|
-| `COMPETITIONS` | `["primeira-liga-pt"]` | Campionati da monitorare |
+| `COMPETITIONS` | i 5 top campionati | Campionati da monitorare |
 | `RARITIES` | `["limited"]` | Rarità: `limited`, `rare`, `super_rare`, `unique` |
 | `DISCOUNT_PERCENT` | `20` | Sconto minimo rispetto alla mediana |
 | `MIN_DISCOUNT_EUR` | `1.0` | Risparmio minimo in euro |
