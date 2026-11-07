@@ -49,7 +49,10 @@ COMPETITIONS = [
 ]
 
 # Rarità da monitorare: "limited", "rare", "super_rare", "unique".
-RARITIES = ["limited"]
+RARITIES = ["limited", "rare"]
+
+# Nota: campionati, rarità e soglie si possono cambiare anche da Telegram (/aiuto).
+# I valori cambiati da Telegram vincono su questi; /reset torna a quelli di config.py.
 
 # --- QUANDO NOTIFICARE --------------------------------------------------------
 # Notifica se il prezzo è almeno questa percentuale sotto la mediana delle vendite.
@@ -67,7 +70,9 @@ ROSTER_REFRESH_HOURS = 24   # ogni quanto riscaricare le rose delle squadre
 HISTORY_MAX_PAGES = 10      # limite di sicurezza alle pagine di storico per giocatore
 
 # --- RITMO --------------------------------------------------------------------
-CHECK_INTERVAL_SECONDS = 60   # ogni quanto leggere le nuove offerte messe in vendita
+REALTIME = True               # offerte in tempo reale via websocket (consigliato)
+CHECK_INTERVAL_SECONDS = 60   # controllo periodico delle offerte se il tempo reale è spento o caduto
+SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo, controllo di sicurezza ogni 5 minuti
 OFFERS_BACKFILL_MINUTES = 5   # all'avvio, guarda anche le offerte degli ultimi N minuti
 OFFERS_MAX_PAGES = 100        # limite di sicurezza alle pagine di offerte per giro
 NOTIFIED_MEMORY_DAYS = 14     # per quanto ricordare le offerte già notificate

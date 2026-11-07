@@ -62,27 +62,36 @@ query TeamPlayers($slug: String!, $after: String) {
 }
 """
 
+# Campi di un'offerta, uguali per il controllo periodico e per il tempo reale.
+OFFER_FIELDS = """
+  id
+  status
+  senderSide {
+    anyCards {
+      slug rarityTyped seasonYear serialNumber inSeasonEligible
+      anyPlayer { slug displayName }
+    }
+  }
+  receiverSide { amounts { eurCents usdCents wei } anyCards { slug } }
+"""
+
 # Tutte le offerte di vendita calcio create o modificate dopo `since`.
 # Nota: Player.lowestPriceAnyCard ignora il filtro inSeason, per questo non lo usiamo.
 LIVE_OFFERS_QUERY = """
 query LiveOffers($since: ISO8601DateTime!, $first: Int!, $after: String) {
   tokens {
     liveSingleSaleOffers(sport: FOOTBALL, updatedAfter: $since, first: $first, after: $after) {
-      nodes {
-        id
-        senderSide {
-          anyCards {
-            slug rarityTyped seasonYear serialNumber inSeasonEligible
-            anyPlayer { slug displayName }
-          }
-        }
-        receiverSide { amounts { eurCents usdCents wei } anyCards { slug } }
-      }
+      nodes { %s }
       pageInfo { hasNextPage endCursor }
     }
   }
 }
-"""
+""" % OFFER_FIELDS
+
+# Tempo reale: scatta quando un'offerta viene aperta, accettata, ritirata o scade.
+OFFER_SUBSCRIPTION = """
+subscription OnOfferUpdated { tokenOfferWasUpdated(sports: [FOOTBALL]) { %s } }
+""" % OFFER_FIELDS
 
 PRICE_HISTORY_QUERY = """
 query PriceHistory($slug: String!, $rarity: Rarity!, $since: ISO8601DateTime!, $last: Int!, $before: String) {
