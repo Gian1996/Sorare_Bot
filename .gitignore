@@ -1,16 +1,20 @@
-# File di configurazione segreto
+# Segreti
 .env
 
-# File temporanei di Python
+# Stato del bot (mediane, notifiche inviate, rose)
+data/
+
+# Python
 __pycache__/
-old_version/
-sorare_memory.json 
 *.py[cod]
 *$py.class
 
-# Ambiente virtuale (se ne usi uno)
+# Vecchie versioni e file di riferimento
+old_version/
+schema.graphql
+
+# Ambiente virtuale
 venv/
 sorare/
 
-# Altri file di sistema
 .DS_Store

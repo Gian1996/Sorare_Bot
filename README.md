@@ -1,79 +1,58 @@
-SorareBot
+# SorareBot
 
-SorareBot è un software automatizzato in Python per il monitoraggio del mercato di Sorare. Il bot individua opportunità di acquisto (sniping) confrontando i prezzi attuali delle carte "Classic" con la loro media storica e notifica l'utente su Telegram quando viene rilevato uno sconto significativo.
-Funzionalità principali
-1. Classic Manager Sniper
+Bot Telegram che controlla il mercato di Sorare e ti avvisa quando qualcuno mette in vendita una carta **Classic** di un giocatore del campionato che ti interessa a un prezzo molto più basso del solito.
 
-Il bot analizza il mercato secondario delle carte delle stagioni precedenti:
+## Come funziona
 
-Analisi Storica: Scarica i dati di vendita degli ultimi 90 giorni per ogni giocatore.
+1. **Giocatori**: per ogni campionato in `config.COMPETITIONS` (di default la Liga Portugal, `primeira-liga-pt`) scarica tutte le squadre e le loro rose. Si aggiornano da sole ogni 24 ore. Altri giocatori si possono aggiungere in `watchlists.py`.
+2. **Prezzo di riferimento**: per ogni giocatore calcola la **mediana** delle vendite Classic degli ultimi 30 giorni. Se le vendite sono meno di 5, usa gli ultimi 90 giorni. La mediana non si fa ingannare dalle poche vendite fuori mercato (numeri di maglia, #1...). Si ricalcola ogni 24 ore.
+3. **Mercato**: ogni 60 secondi legge tutte le nuove offerte di vendita su Sorare. Tiene solo quelle Classic, della rarità scelta, di giocatori monitorati.
+4. **Notifica**: se il prezzo è almeno il 20% sotto la mediana **e** costa almeno 1 € in meno, manda un messaggio Telegram con il link alla carta. Ogni offerta viene notificata una volta sola, anche dopo un riavvio.
 
-Valutazione Prezzo: Calcola un prezzo medio basato sulle vendite effettive, escludendo le aste delle carte nuove per mantenere i dati accurati.
+Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 
-Notifiche: Invia un messaggio Telegram quando il prezzo più basso (Floor Price) scende sotto una soglia di sconto personalizzabile (es. 20%).
+## Installazione
 
-2. Monitoraggio Automatico Squadre
+```bash
+cd script
+python -m venv ../sorare          # solo la prima volta
+source ../sorare/bin/activate
+pip install -r requirements.txt
+cp .env.example .env              # poi compila .env
+python main.py
+```
 
-Non è necessario inserire i singoli nomi dei giocatori:
+## Accesso a Sorare
 
-È sufficiente inserire gli "slug" delle squadre nel file di configurazione (es. ac-milan, roma-roma).
+| Modalità | Come | Limite | Va bene? |
+|---|---|---|---|
+| **API key** (consigliata) | `SORARE_API_KEY` nel `.env`, da [sorare.com/settings/developer](https://sorare.com/settings/developer) | 200 chiamate/min | Sì |
+| Login | `SORARE_EMAIL`, `SORARE_PASSWORD`, `AUDIENCE` | 60 chiamate/min | Sì, ma non con la 2FA attiva |
+| Anonimo | niente | 20 chiamate/min | Solo per prove: Sorare blocca le chiamate dopo pochi minuti |
 
-Il bot identifica automaticamente tutti i giocatori attivi della rosa e inizia a monitorarli.
+## Impostazioni (`config.py`)
 
-3. Memoria Locale (Caching)
+| Impostazione | Default | Cosa fa |
+|---|---|---|
+| `COMPETITIONS` | `["primeira-liga-pt"]` | Campionati da monitorare |
+| `RARITIES` | `["limited"]` | Rarità: `limited`, `rare`, `super_rare`, `unique` |
+| `DISCOUNT_PERCENT` | `20` | Sconto minimo rispetto alla mediana |
+| `MIN_DISCOUNT_EUR` | `1.0` | Risparmio minimo in euro |
+| `MIN_SALES` | `5` | Vendite minime per fidarsi della mediana |
+| `HISTORY_DAYS` / `HISTORY_FALLBACK_DAYS` | `30` / `90` | Finestra delle vendite |
+| `CHECK_INTERVAL_SECONDS` | `60` | Ogni quanto leggere le nuove offerte |
 
-Per garantire velocità e rispettare i limiti delle API di Sorare:
+Con `DRY_RUN=1` nel `.env` le notifiche vengono solo stampate a schermo.
 
-Le medie e le statistiche vengono salvate in sorare_memory.json.
+## File
 
-Al riavvio, il bot carica i dati locali evitando di scaricare nuovamente migliaia di punti dati, riducendo i tempi di attesa.
+- `main.py`: ciclo principale (rose, mediane, controllo offerte, notifiche)
+- `sorare_api.py`: chiamate a Sorare, con limite di chiamate, retry e re-login
+- `pricing.py`: conversione in euro, mediana, regola dell'affare
+- `notifier.py`: invio su Telegram
+- `storage.py`: salvataggio dello stato in `data/`
+- `schema.graphql`: schema dell'API Sorare (aggiornalo con `curl -o schema.graphql https://api.sorare.com/graphql/schema`)
 
-4. Conversione ETH/EUR
+## Disclaimer
 
-Il bot interroga l'API di Coinbase per ottenere il tasso di cambio Ethereum -> Euro in tempo reale.
-
-Tutti i calcoli e le notifiche vengono mostrati in Euro.
-
-Architettura del Progetto
-
-- main.py: Punto di ingresso del programma. Gestisce il loop principale di scansione.
-
-- api.py: Gestisce le chiamate GraphQL verso Sorare (autenticazione, query mercato e rose).
-
-- utils.py: Contiene la logica per il calcolo delle medie, la gestione dei messaggi Telegram e dei tassi di cambio.
-
-- config.py: Gestisce il caricamento delle credenziali e dei parametri di trading.
-
-- watchlists.py: Permette l'aggiunta manuale di giocatori specifici.
-
-Requisiti
-
-- Python 3.8 o superiore
-
-- Token del Bot Telegram e Chat ID
-
-- Account Sorare (Email/Password o Token API)
-
-Installazione e Avvio
-
-Clona il repository
-
-    git clone https://github.com/tuo-username/Sorare_Bot.git
-    cd Sorare_Bot/script
-
-Installa le dipendenze
-
-    pip install -r requirements.txt
-
-Configura l'ambiente Crea un file .env nella cartella principale e inserisci i tuoi dati:
-
-    TELEGRAM_TOKEN=il_tuo_token
-    CHAT_ID=il_tuo_chat_id
-
-Avvia il bot
-
-    python main.py
-
-Disclaimer
-
-Questo software è a scopo didattico e di supporto personale. Il trading su Sorare comporta rischi finanziari. L'autore non è responsabile per eventuali perdite economiche derivanti dall'uso di questo bot o da ban dell'account dovuti a un uso improprio delle API.
+Software a scopo personale. Il trading su Sorare comporta rischi finanziari, e l'uso dell'API è soggetto ai termini di Sorare.
