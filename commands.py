@@ -4,6 +4,7 @@ import time
 import unicodedata
 
 import config
+from pricing import ago
 from settings import VALID_RARITIES
 from sorare_api import SorareError
 
@@ -33,7 +34,7 @@ def register(bot):
         return (
             "<b>Comandi</b>\n"
             "/stato · come sta andando il bot\n"
-            "/prezzo <i>nome</i> · mediana di un giocatore\n"
+            "/prezzo <i>nome</i> · prezzo di riferimento e ultime vendite\n"
             "/soglia <i>25</i> · sconto minimo in %\n"
             "/minimo <i>2</i> · risparmio minimo in €\n"
             "/rarita <i>limited rare</i> · rarità da monitorare\n"
@@ -61,7 +62,8 @@ def register(bot):
             f"Giocatori: {len(bot.roster.data['players'])}\n"
             f"Mediane pronte: {bot.ready_count()}/{total} giocatori×rarità con carte in vendita"
             f" ({len(bot.stale_keys())} da aggiornare, {bot.ondemand.qsize()} in calcolo al volo)\n"
-            f"Offerte viste: {c['offers']} · del campionato: {c['relevant']} · affari: {c['deals']}\n\n"
+            f"Offerte viste: {c['offers']} · del campionato: {c['relevant']} · affari: {c['deals']}\n"
+            f"Vendite registrate in tempo reale: {c.get('sales', 0)}\n\n"
             f"Campionati: {html.escape(', '.join(s.competitions))}\n"
             f"Rarità: {', '.join(s.rarities)}\n"
             f"Soglia: -{s.discount_percent:g}% e almeno {s.min_discount_eur:.2f} €"
@@ -80,17 +82,23 @@ def register(bot):
         for slug in matches:
             lines.append(f"⚽ <b>{html.escape(players[slug])}</b>")
             for rarity in s.rarities:
-                st = bot.stats.data.get(f"{slug}|{rarity}")
+                key = f"{slug}|{rarity}"
+                entry = bot.stats.data.get(key)
+                ref = bot.ref_for(key)
                 on_sale = slug in bot.market.data["on_sale"].get(rarity, {})
-                if not st and not on_sale:
-                    lines.append(f"   {rarity}: nessuna carta in vendita (la calcolo al primo annuncio)")
-                elif not st or "count" not in st:
+                if not entry and not on_sale:
+                    lines.append(f"   {rarity}: nessuna carta in vendita (lo calcolo al primo annuncio)")
+                elif not entry:
                     lines.append(f"   {rarity}: in calcolo")
-                elif st["count"] < config.MIN_SALES:
-                    lines.append(f"   {rarity}: troppo poche vendite ({st['count']})")
+                elif ref is None:
+                    lines.append(f"   {rarity}: storico non disponibile al momento")
+                elif ref["count"] < config.MIN_SALES:
+                    lines.append(f"   {rarity}: troppo poche vendite ({ref['count']} in {config.HISTORY_DAYS}gg)")
                 else:
-                    lines.append(f"   {rarity}: mediana {st['median']:.2f} € su {st['count']} vendite"
-                                 f" in {st.get('days', config.HISTORY_DAYS)}gg ({_ago(st['updated_at'])})")
+                    recent = " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"])
+                    lines.append(f"   {rarity}: riferimento <b>{ref['median']:.2f} €</b> "
+                                 f"(mediana pesata, {ref['count']} vendite)\n"
+                                 f"      ultime: {recent}")
         return "\n".join(lines)
 
     async def soglia(args):
@@ -163,7 +171,7 @@ def register(bot):
     n.add_command("aiuto", "Elenco dei comandi", aiuto)
     n.add_command("start", "Elenco dei comandi", aiuto)
     n.add_command("stato", "Come sta andando il bot", stato)
-    n.add_command("prezzo", "Mediana di un giocatore", prezzo)
+    n.add_command("prezzo", "Prezzo di riferimento di un giocatore", prezzo)
     n.add_command("soglia", "Sconto minimo in %", soglia)
     n.add_command("minimo", "Risparmio minimo in euro", minimo)
     n.add_command("rarita", "Rarità da monitorare", rarita)

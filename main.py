@@ -10,7 +10,7 @@ import commands
 import config
 import watchlists
 from notifier import Notifier
-from pricing import compute_stats, evaluate_deal, to_eur
+from pricing import ago, evaluate_deal, reference, to_eur
 from realtime import OfferStream
 from settings import Settings
 from sorare_api import ComplexityError, SorareClient, SorareError
@@ -37,8 +37,13 @@ class SniperBot:
         self.client = SorareClient()
         self.notifier = Notifier(config.TELEGRAM_TOKEN, config.CHAT_ID, config.DRY_RUN)
         path = lambda name: os.path.join(config.DATA_DIR, name)
-        # stats: {"<slug>|<rarità>": {"median", "p25", "count", "days", "updated_at"}}
-        self.stats = JsonStore(path("stats.json"), {})
+        # stats: {"<slug>|<rarità>": {"sales": [[timestamp, prezzo €], ...], "updated_at"}}
+        # (al posto di "sales" c'è "error" se lo storico non era disponibile)
+        self.stats = JsonStore(path("stats.json"), {}, compact=True)
+        # Il vecchio formato salvava solo la mediana, senza le vendite: va ricalcolato.
+        self.stats.data = {k: v for k, v in self.stats.data.items() if "sales" in v or "error" in v}
+        self.stats_dirty = False
+        self.seen_sales = {}  # id offerte vendute già registrate (il websocket può ripeterle)
         # notified: {"<id offerta>": {"ts", "msg_id", "text", "closed"}}
         self.notified = JsonStore(path("notified.json"), {})
         # roster: {"updated_at", "sources", "players": {slug: nome}}
@@ -133,8 +138,15 @@ class SniperBot:
         on_sale = self.market.data["on_sale"]
         return [f"{slug}|{r}" for r in self.settings.rarities for slug in on_sale.get(r, {}) if slug in players]
 
+    def ref_for(self, key):
+        """Prezzo di riferimento attuale (mediana pesata e ultime vendite), None se mai calcolato."""
+        entry = self.stats.data.get(key)
+        if not entry or "sales" not in entry:
+            return None
+        return reference(entry["sales"], config.HISTORY_DAYS, config.HALF_LIFE_DAYS, config.RECENT_SALES_CHECK)
+
     def ready_count(self):
-        return sum(1 for k in self.all_keys() if self.stats.data.get(k, {}).get("count", 0) >= config.MIN_SALES)
+        return sum(1 for k in self.all_keys() if (self.ref_for(k) or {}).get("count", 0) >= config.MIN_SALES)
 
     def stale_keys(self):
         cutoff = now_ts() - config.STATS_REFRESH_HOURS * 3600
@@ -153,26 +165,30 @@ class SniperBot:
     async def compute_key(self, key):
         """Scarica lo storico di un giocatore e ne calcola la mediana, poi rivaluta le offerte in attesa."""
         slug, rarity = key.split("|")
-        now = datetime.now(timezone.utc)
-        long_days = max(config.HISTORY_DAYS, config.HISTORY_FALLBACK_DAYS)
+        since = iso_utc(datetime.now(timezone.utc) - timedelta(days=config.HISTORY_DAYS))
         self.inflight.add(key)
         try:
-            sales = await self._price_history(slug, rarity, iso_utc(now - timedelta(days=long_days)))
+            history = await self._price_history(slug, rarity, since)
         except SorareError as e:
             log.warning("Storico di %s non disponibile: %s", slug, e)
-            self.stats.data[key] = {**self.stats.data.get(key, {}), "updated_at": now_ts()}
+            old = self.stats.data.get(key, {})
+            self.stats.data[key] = {**old, "updated_at": now_ts()} if "sales" in old else \
+                {"error": str(e)[:200], "updated_at": now_ts()}
             self.pending.pop(key, None)
             return False
         finally:
             self.inflight.discard(key)
-        # Le date ISO in UTC si confrontano bene anche come stringhe.
-        recent_cutoff = iso_utc(now - timedelta(days=config.HISTORY_DAYS))
-        recent = [to_eur(s["amounts"], self.rates) for s in sales if s["date"] >= recent_cutoff]
-        stats, days = compute_stats(recent), config.HISTORY_DAYS
-        if stats["count"] < config.MIN_SALES and long_days > config.HISTORY_DAYS:
-            stats = compute_stats([to_eur(s["amounts"], self.rates) for s in sales])
-            days = long_days
-        self.stats.data[key] = {**stats, "days": days, "updated_at": now_ts()}
+        sales = []
+        for sale in history:
+            price = to_eur(sale["amounts"], self.rates)
+            if price:
+                ts = datetime.strptime(sale["date"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+                sales.append([int(ts), round(price, 2)])
+        # Vendite arrivate in tempo reale mentre scaricavo, che lo storico non ha ancora.
+        newest = max((ts for ts, _ in sales), default=0)
+        sales += [s for s in self.stats.data.get(key, {}).get("sales", []) if s[0] > newest]
+        sales.sort(reverse=True)
+        self.stats.data[key] = {"sales": sales[:config.HISTORY_MAX_SALES], "updated_at": now_ts()}
         for offer in self.pending.pop(key, []):
             await self.handle_offer(offer, retry=True)
         return True
@@ -213,7 +229,7 @@ class SniperBot:
                     continue
                 await self.compute_key(key)
                 done += 1
-                if done % 25 == 0:
+                if done % 200 == 0:
                     self.stats.save()
                 if done % 100 == 0:
                     log.info("Mediane: %d calcolate, ne mancano %d", done, len(stale) - done)
@@ -238,9 +254,39 @@ class SniperBot:
 
     # --- offerte ----------------------------------------------------------------------
 
+    def _monitored_card(self, offer):
+        """La carta dell'offerta se è una singola Classic di un giocatore e rarità monitorati."""
+        cards = offer["senderSide"]["anyCards"]
+        if len(cards) != 1 or offer["receiverSide"]["anyCards"]:
+            return None  # pacchetti di più carte o scambi carta-contro-carta
+        card = cards[0]
+        if (card["anyPlayer"]["slug"] not in self.roster.data["players"]
+                or card["rarityTyped"] not in self.settings.rarities or card["inSeasonEligible"]):
+            return None
+        return card
+
+    def _record_sale(self, offer):
+        """Una carta è stata venduta: aggiorno subito il prezzo di riferimento di quel giocatore."""
+        card = self._monitored_card(offer)
+        if not card or offer["id"] in self.seen_sales or not self.rates:
+            return
+        price = to_eur(offer["receiverSide"]["amounts"], self.rates)
+        entry = self.stats.data.get(f"{card['anyPlayer']['slug']}|{card['rarityTyped']}")
+        if not price or not entry or "sales" not in entry:
+            return  # senza storico la vendita arriverà comunque con il prossimo download
+        self.seen_sales[offer["id"]] = now_ts()
+        if len(self.seen_sales) > 5000:
+            self.seen_sales = dict(sorted(self.seen_sales.items(), key=lambda kv: kv[1])[-2500:])
+        entry["sales"].insert(0, [int(now_ts()), round(price, 2)])
+        del entry["sales"][config.HISTORY_MAX_SALES:]
+        self.stats_dirty = True
+        self.counters["sales"] = self.counters.get("sales", 0) + 1
+
     async def handle_offer(self, offer, retry=False):
         """Valuta un'offerta (dal tempo reale, dal controllo periodico o dopo il calcolo al volo)."""
         status = offer.get("status")
+        if status == "accepted":
+            self._record_sale(offer)
         if status in CLOSED_LABEL:
             await self._mark_closed(offer["id"], status)
             return
@@ -249,43 +295,40 @@ class SniperBot:
         if not retry:
             self.counters["offers"] += 1
 
-        cards = offer["senderSide"]["anyCards"]
-        if len(cards) != 1 or offer["receiverSide"]["anyCards"]:
-            return  # pacchetti di più carte o scambi carta-contro-carta
-        card = cards[0]
-        slug, rarity = card["anyPlayer"]["slug"], card["rarityTyped"]
-        names = self.roster.data["players"]
-        if slug not in names or rarity not in self.settings.rarities or card["inSeasonEligible"]:
+        card = self._monitored_card(offer)
+        if not card:
             return
+        slug, rarity = card["anyPlayer"]["slug"], card["rarityTyped"]
         if not retry:
             self.counters["relevant"] += 1
 
         key = f"{slug}|{rarity}"
-        stats = self.stats.data.get(key)
-        if stats is None:
-            # Nessuna mediana ancora: la calcolo subito e poi rivaluto questa offerta.
+        entry = self.stats.data.get(key)
+        if entry is None:
+            # Nessuno storico ancora: lo scarico subito e poi rivaluto questa offerta.
             waiting = self.pending.setdefault(key, [])
             if len(waiting) < 5:
                 waiting.append(offer)
             self._enqueue(key)
             return
-        if "count" not in stats:
+        if "sales" not in entry:
             return  # storico non disponibile al momento
-        if now_ts() - stats.get("updated_at", 0) > config.STATS_REFRESH_HOURS * 3600:
-            self._enqueue(key)  # mediana vecchia: la uso, ma intanto la aggiorno
+        if now_ts() - entry.get("updated_at", 0) > config.STATS_REFRESH_HOURS * 3600:
+            self._enqueue(key)  # storico vecchio: lo uso, ma intanto lo riscarico
         if offer["id"] in self.notified.data or not self.rates:
             return
         price = to_eur(offer["receiverSide"]["amounts"], self.rates)
-        discount = evaluate_deal(price, stats, self.settings.discount_percent,
-                                 self.settings.min_discount_eur, config.MIN_SALES)
+        ref = self.ref_for(key)
+        discount = evaluate_deal(price, ref, self.settings.discount_percent,
+                                 self.settings.min_discount_eur, config.MIN_SALES, config.RECENT_MAX_AGE_DAYS)
         if discount is None:
             return
-        name = card["anyPlayer"]["displayName"] or names.get(slug, slug)
+        name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
         log.info("AFFARE: %s %s a %.2f € (-%.0f%%)", name, rarity, price, discount)
         if self.settings.paused:
             return
         self.counters["deals"] += 1
-        text = self.deal_message(name, rarity, price, discount, stats, card)
+        text = self.deal_message(name, rarity, price, discount, ref, card)
         message_id = await self.notifier.send(text)
         if message_id is not None:
             self.notified.data[offer["id"]] = {"ts": now_ts(), "msg_id": message_id, "text": text}
@@ -356,16 +399,17 @@ class SniperBot:
         self.notified.save()
 
     @staticmethod
-    def deal_message(name, rarity, price, discount, stats, card):
+    def deal_message(name, rarity, price, discount, ref, card):
         season = card["seasonYear"]
         url = f"https://sorare.com/football/cards/{card['slug']}"
+        recent = " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"])
         return (
             f"🚨 <b>Affare {RARITY_LABEL.get(rarity, rarity)}</b>\n"
             f"⚽ <b>{html.escape(name)}</b> · {season}-{str(season + 1)[-2:]} #{card['serialNumber']}\n"
             f"💶 Prezzo: <b>{price:.2f} €</b>\n"
-            f"📊 Mediana {stats.get('days', config.HISTORY_DAYS)}gg: {stats['median']:.2f} € "
-            f"({stats['count']} vendite)\n"
-            f"📉 Sconto: <b>-{discount:.0f}%</b> ({stats['median'] - price:.2f} € in meno)\n"
+            f"📊 Riferimento: {ref['median']:.2f} € (mediana pesata, {ref['count']} vendite)\n"
+            f"🕒 Ultime vendite: {recent}\n"
+            f"📉 Sconto: <b>-{discount:.0f}%</b> ({ref['median'] - price:.2f} € in meno)\n"
             f'🔗 <a href="{url}">Apri su Sorare</a>'
         )
 
@@ -381,6 +425,9 @@ class SniperBot:
                 await self.refresh_rates()
                 await self.refresh_roster()
                 await self.refresh_market()
+                if self.stats_dirty:
+                    self.stats.save()  # vendite arrivate in tempo reale
+                    self.stats_dirty = False
                 if realtime_ok:
                     # Il tempo reale vede tutto: il flusso periodico di Sorare può essere in ritardo
                     # anche di un'ora, quindi lo uso solo come piano B quando il websocket cade.

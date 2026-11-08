@@ -48,22 +48,31 @@ RARITIES = ["limited", "rare"]
 # I valori cambiati da Telegram vincono su questi; /reset torna a quelli di config.py.
 
 # --- QUANDO NOTIFICARE --------------------------------------------------------
-# Notifica se il prezzo è almeno questa percentuale sotto la mediana delle vendite.
+# Notifica se il prezzo è almeno questa percentuale sotto il prezzo di riferimento
+# (mediana pesata delle vendite, vedi PREZZO DI RIFERIMENTO più sotto)...
 DISCOUNT_PERCENT = 20
 # ...e lo sconto vale almeno questi euro (evita notifiche su carte da 0,40 €).
 MIN_DISCOUNT_EUR = 1.0
-# Numero minimo di vendite nel periodo per fidarsi della mediana.
+# Numero minimo di vendite in HISTORY_DAYS per fidarsi del prezzo di riferimento.
 MIN_SALES = 5
 
-# --- STORICO PREZZI -----------------------------------------------------------
-HISTORY_DAYS = 30           # finestra delle vendite Classic su cui calcolare la mediana
-HISTORY_FALLBACK_DAYS = 90  # se in HISTORY_DAYS ci sono meno di MIN_SALES vendite, usa questa
-STATS_REFRESH_HOURS = 24    # ogni quanto ricalcolare la mediana di un giocatore
+# --- PREZZO DI RIFERIMENTO ----------------------------------------------------
+# Mediana pesata: il peso di una vendita si dimezza ogni HALF_LIFE_DAYS giorni
+# (oggi 1, dopo 3 giorni 0,5, dopo 6 giorni 0,25...). Più basso = segue più in fretta i cali.
+HALF_LIFE_DAYS = 3
+# Il prezzo deve essere anche sotto la mediana delle ultime N vendite:
+# se le ultime vendite sono già tutte basse (infortunio, panchina...) non è un affare.
+RECENT_SALES_CHECK = 3
+# ...e quelle ultime N vendite devono essere tutte degli ultimi N giorni, altrimenti
+# il giocatore vende troppo poco per sapere quanto vale oggi.
+RECENT_MAX_AGE_DAYS = 30
+HISTORY_DAYS = 90           # vendite più vecchie di così non contano
+STATS_REFRESH_HOURS = 24    # ogni quanto riscaricare lo storico (le vendite nuove arrivano in tempo reale)
 ROSTER_REFRESH_HOURS = 24   # ogni quanto riscaricare le rose delle squadre
 MARKET_REFRESH_HOURS = 6    # ogni quanto ricontrollare quali giocatori hanno carte in vendita
 HISTORY_MAX_SALES = 100     # mediana sulle ultime N vendite al massimo (di solito 1 sola chiamata)
 HISTORY_MAX_PAGES = 10      # limite di sicurezza alle pagine di storico per giocatore
-STATS_CONCURRENCY = 3       # mediane calcolate in parallelo (il limite di chiamate resta 180/min)
+STATS_CONCURRENCY = 5       # storici scaricati in parallelo (il limite di chiamate resta 180/min)
 
 # --- RITMO --------------------------------------------------------------------
 REALTIME = True               # offerte in tempo reale via websocket (consigliato)
