@@ -1,6 +1,6 @@
 """Configurazione del bot.
 
-I segreti (token, password, API key) stanno nel file .env.
+I segreti (token Telegram, API key Sorare) stanno nel file .env.
 Le impostazioni di trading stanno qui sotto e si possono modificare liberamente.
 """
 import os
@@ -24,13 +24,6 @@ CHAT_ID = os.getenv("CHAT_ID")
 # Consigliata: API key gratuita da https://sorare.com/settings/developer
 # (alza il limite da 20 a 200 chiamate al minuto).
 SORARE_API_KEY = os.getenv("SORARE_API_KEY")
-
-# Facoltativi: login con email/password (60 chiamate al minuto).
-# Non funziona se l'account ha la 2FA attiva.
-SORARE_EMAIL = os.getenv("SORARE_EMAIL")
-SORARE_PASSWORD = os.getenv("SORARE_PASSWORD")
-AUDIENCE = os.getenv("AUDIENCE")
-USE_PASSWORD_LOGIN = _env_bool("USE_PASSWORD_LOGIN", default=True)
 
 USER_AGENT = os.getenv("USER_AGENT") or "sorare-sniper-bot/2.0"
 

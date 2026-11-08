@@ -5,4 +5,4 @@ cd "$(dirname "$0")"
 if [ "$1" = "prova" ]; then
   export DRY_RUN=1
 fi
-exec ../sorare/bin/python main.py
+exec "$(cd .. && pwd)/sorare/bin/python" main.py

@@ -1,13 +1,13 @@
 """Client asincrono per l'API GraphQL di Sorare.
 
-Gestisce autenticazione (API key / login / anonimo), limite di chiamate,
-retry su errori di rete, 429 (Retry-After), 5xx e token scaduti.
+Accesso con API key (o anonimo, solo per prove), limite di chiamate,
+retry su errori di rete, 429 (Retry-After) e 5xx.
+Il bot non usa mai email e password del tuo account.
 """
 import asyncio
 import logging
 import time
 
-import bcrypt
 import httpx
 
 import config
@@ -15,11 +15,10 @@ import config
 log = logging.getLogger(__name__)
 
 GRAPHQL_URL = "https://api.sorare.com/graphql"
-SALT_URL = "https://api.sorare.com/api/v1/users/{email}"
 MAX_RETRIES = 5
 
-# Chiamate al minuto per modalità (un po' sotto i limiti ufficiali 20/60/200).
-CALLS_PER_MINUTE = {"anonimo": 18, "login": 55, "api key": 180}
+# Chiamate al minuto per modalità (un po' sotto i limiti ufficiali 20/200).
+CALLS_PER_MINUTE = {"anonimo": 18, "api key": 180}
 
 
 class SorareError(Exception):
@@ -106,18 +105,6 @@ query PriceHistory($slug: String!, $rarity: Rarity!, $since: ISO8601DateTime!, $
 }
 """
 
-SIGN_IN_MUTATION = """
-mutation SignIn($input: signInInput!) {
-  signIn(input: $input) {
-    currentUser { slug }
-    jwtToken(aud: "%s") { token expiredAt }
-    otpSessionChallenge
-    errors { message }
-  }
-}
-"""
-
-
 class SorareClient:
     def __init__(self):
         self.http = httpx.AsyncClient(
@@ -125,7 +112,6 @@ class SorareClient:
             headers={"Content-Type": "application/json", "User-Agent": config.USER_AGENT},
         )
         self.mode = "anonimo"
-        self.jwt = None
         self._lock = asyncio.Lock()
         self._next_slot = 0.0
         self._min_interval = 60 / CALLS_PER_MINUTE["anonimo"]
@@ -137,52 +123,16 @@ class SorareClient:
     async def close(self):
         await self.http.aclose()
 
-    # --- autenticazione ---------------------------------------------------------
+    # --- accesso -----------------------------------------------------------------
 
     async def authenticate(self):
         if config.SORARE_API_KEY:
             self.http.headers["APIKEY"] = config.SORARE_API_KEY
             self.mode = "api key"
-        if config.USE_PASSWORD_LOGIN and config.SORARE_EMAIL and config.SORARE_PASSWORD and config.AUDIENCE:
-            if await self._login() and self.mode == "anonimo":
-                self.mode = "login"
         self._min_interval = 60 / CALLS_PER_MINUTE[self.mode]
         log.info("Accesso a Sorare: modalità %s (%d chiamate/min)", self.mode, CALLS_PER_MINUTE[self.mode])
         if self.mode == "anonimo":
             log.warning("Senza API key il bot è lento: creane una su https://sorare.com/settings/developer")
-
-    async def _login(self):
-        try:
-            resp = await self.http.get(SALT_URL.format(email=config.SORARE_EMAIL))
-            resp.raise_for_status()
-            salt = resp.json()["salt"]
-            hashed = bcrypt.hashpw(config.SORARE_PASSWORD.encode(), salt.encode()).decode()
-            resp = await self.http.post(GRAPHQL_URL, json={
-                "query": SIGN_IN_MUTATION % config.AUDIENCE,
-                "variables": {"input": {"email": config.SORARE_EMAIL, "password": hashed}},
-            })
-            result = (resp.json().get("data") or {}).get("signIn") or {}
-        except (httpx.HTTPError, ValueError, KeyError) as e:
-            log.error("Login Sorare fallito: %s", e)
-            return False
-
-        if result.get("otpSessionChallenge"):
-            log.error("Login Sorare: l'account ha la 2FA attiva, il login automatico non è possibile. "
-                      "Usa una SORARE_API_KEY.")
-            return False
-        token = (result.get("jwtToken") or {}).get("token")
-        if not token:
-            errors = "; ".join(e.get("message", "?") for e in result.get("errors") or []) or "risposta vuota"
-            log.error("Login Sorare fallito: %s", errors)
-            return False
-        self.jwt = token
-        log.info("Login Sorare riuscito (%s)", (result.get("currentUser") or {}).get("slug"))
-        return True
-
-    def _auth_headers(self):
-        if not self.jwt:
-            return {}
-        return {"Authorization": f"Bearer {self.jwt}", "JWT-AUD": config.AUDIENCE}
 
     # --- chiamate ----------------------------------------------------------------
 
@@ -195,14 +145,12 @@ class SorareClient:
             self._next_slot = max(now, self._next_slot) + self._min_interval
 
     async def query(self, query, variables=None):
-        relogged = False
         for attempt in range(MAX_RETRIES + 1):
             await self._throttle()
             try:
                 resp = await self.http.post(
                     GRAPHQL_URL,
                     json={"query": query, "variables": variables or {}},
-                    headers=self._auth_headers(),
                 )
             except httpx.HTTPError as e:
                 delay = min(2 ** attempt * 2, 60)
@@ -215,12 +163,8 @@ class SorareClient:
                 log.warning("Troppe richieste a Sorare, attendo %ds", delay)
                 await asyncio.sleep(delay)
                 continue
-            if resp.status_code == 401 and self.jwt and not relogged:
-                log.info("Token scaduto, rifaccio il login")
-                relogged = True
-                if not await self._login():
-                    self.jwt = None
-                continue
+            if resp.status_code == 401:
+                raise SorareError("API key rifiutata da Sorare (401): controlla SORARE_API_KEY nel .env")
             if resp.status_code >= 500:
                 delay = min(2 ** attempt * 2, 60)
                 log.warning("Sorare ha risposto %d, riprovo tra %ds", resp.status_code, delay)

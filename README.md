@@ -52,13 +52,9 @@ Slug dei campionati principali: `serie-a-it`, `premier-league-gb-eng`, `laliga-e
 
 ## Accesso a Sorare
 
-| Modalità | Come | Limite | Va bene? |
-|---|---|---|---|
-| **API key** (consigliata) | `SORARE_API_KEY` nel `.env`, da [sorare.com/settings/developer](https://sorare.com/settings/developer) | 200 chiamate/min | Sì |
-| Login | `SORARE_EMAIL`, `SORARE_PASSWORD`, `AUDIENCE` | 60 chiamate/min | Sì, ma non con la 2FA attiva |
-| Anonimo | niente | 20 chiamate/min | No: Sorare blocca dopo pochi minuti |
-
-Con la API key il login non serve: `USE_PASSWORD_LOGIN=0` nel `.env` lo disattiva.
+Il bot usa solo una **API key**, da mettere come `SORARE_API_KEY` nel `.env`. La crei su [sorare.com/settings/developer](https://sorare.com/settings/developer) (200 chiamate/min).
+Non usa mai email e password del tuo account, e legge soltanto dati pubblici: non compra né vende nulla.
+Senza API key funziona solo per brevi prove: il limite è di 20 chiamate/min e Sorare blocca dopo pochi minuti.
 
 ## Altre impostazioni (`config.py`)
 
@@ -75,7 +71,7 @@ Con la API key il login non serve: `USE_PASSWORD_LOGIN=0` nel `.env` lo disattiv
 - `realtime.py`: offerte in tempo reale dal websocket di Sorare
 - `commands.py`: comandi Telegram
 - `settings.py`: impostazioni modificabili da Telegram
-- `sorare_api.py`: chiamate a Sorare, con limite di chiamate, retry e re-login
+- `sorare_api.py`: chiamate a Sorare, con limite di chiamate e retry
 - `pricing.py`: conversione in euro, mediana, regola dell'affare
 - `notifier.py`: invio e modifica dei messaggi Telegram
 - `storage.py`: salvataggio dello stato in `data/`
