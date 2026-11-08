@@ -12,9 +12,9 @@ import watchlists
 from notifier import Notifier
 from pricing import ago, evaluate_deal, reference, to_eur
 from realtime import OfferStream
-from settings import Settings
 from sorare_api import ComplexityError, SorareClient, SorareError
 from storage import JsonStore
+from users import Users
 
 log = logging.getLogger("sorarebot")
 
@@ -33,7 +33,7 @@ def iso_utc(dt):
 
 class SniperBot:
     def __init__(self):
-        self.settings = Settings()
+        self.users = Users(config.CHAT_ID or 0)
         self.client = SorareClient()
         self.notifier = Notifier(config.TELEGRAM_TOKEN, config.CHAT_ID, config.DRY_RUN)
         path = lambda name: os.path.join(config.DATA_DIR, name)
@@ -43,10 +43,11 @@ class SniperBot:
         # Il vecchio formato salvava solo la mediana, senza le vendite: va ricalcolato.
         self.stats.data = {k: v for k, v in self.stats.data.items() if "sales" in v or "error" in v}
         self.stats_dirty = False
-        self.seen_sales = {}  # id offerte vendute già registrate (il websocket può ripeterle)
+        self.seen_sales = {}
+        self._player_competitions = None  # id offerte vendute già registrate (il websocket può ripeterle)
         # notified: {"<id offerta>": {"ts", "msg_id", "text", "closed"}}
         self.notified = JsonStore(path("notified.json"), {})
-        # roster: {"updated_at", "sources", "players": {slug: nome}}
+        # roster: {"updated_at", "sources", "players": {slug: nome}, "competitions": {campionato: [slug]}}
         self.roster = JsonStore(path("roster.json"), {"updated_at": 0, "sources": [], "players": {}})
         # market: {"updated_at", "key", "on_sale": {rarità: {slug: True se la più economica è Classic}}}
         self.market = JsonStore(path("market.json"), {"updated_at": 0, "key": None, "on_sale": {}})
@@ -81,14 +82,15 @@ class SniperBot:
             log.warning("Cambio ETH non aggiornato (%s), uso l'ultimo noto", e)
 
     async def refresh_roster(self):
-        competitions = self.settings.competitions
+        competitions = self.users.all_competitions()
         sources = sorted(competitions) + sorted(watchlists.EXTRA_PLAYERS)
         fresh = now_ts() - self.roster.data["updated_at"] < config.ROSTER_REFRESH_HOURS * 3600
-        if fresh and self.roster.data["sources"] == sources and self.roster.data["players"]:
+        if (fresh and self.roster.data["sources"] == sources and self.roster.data["players"]
+                and "competitions" in self.roster.data):
             return
 
         log.info("Scarico le rose delle squadre...")
-        players = {}
+        players, by_competition = {}, {}
         for competition in competitions:
             try:
                 name, teams = await self.client.competition_teams(competition)
@@ -104,6 +106,7 @@ class SniperBot:
                     continue
                 log.debug("  %s: %d giocatori", team["name"], len(team_players))
                 players.update({p["slug"]: p["displayName"] for p in team_players})
+                by_competition.setdefault(competition, []).extend(p["slug"] for p in team_players)
         for slug in watchlists.EXTRA_PLAYERS:
             players.setdefault(slug, self.roster.data["players"].get(slug, slug))
 
@@ -112,19 +115,33 @@ class SniperBot:
                 log.error("Nessun giocatore scaricato, tengo la lista precedente")
                 return
             raise SorareError("Nessun giocatore da monitorare: controlla i campionati")
-        self.roster.data = {"updated_at": now_ts(), "sources": sources, "players": players}
+        self.roster.data = {"updated_at": now_ts(), "sources": sources, "players": players,
+                            "competitions": by_competition}
         self.roster.save()
+        self._player_competitions = None
         log.info("Giocatori monitorati: %d", len(players))
+
+    def player_competitions(self, slug):
+        """Campionati di un giocatore ("*" per i giocatori extra di watchlists.py, validi per tutti)."""
+        if self._player_competitions is None:
+            index = {}
+            for competition, slugs in self.roster.data.get("competitions", {}).items():
+                for player in slugs:
+                    index.setdefault(player, set()).add(competition)
+            for player in watchlists.EXTRA_PLAYERS:
+                index.setdefault(player, set()).add("*")
+            self._player_competitions = index
+        return self._player_competitions.get(slug, set())
 
     async def refresh_market(self):
         """Quali giocatori hanno carte in vendita: le mediane si calcolano in anticipo solo per loro."""
-        key = f"{self.roster.data['updated_at']}|{','.join(sorted(self.settings.rarities))}"
+        key = f"{self.roster.data['updated_at']}|{','.join(sorted(self.users.all_rarities()))}"
         fresh = now_ts() - self.market.data["updated_at"] < config.MARKET_REFRESH_HOURS * 3600
         if fresh and self.market.data["key"] == key:
             return
         slugs = list(self.roster.data["players"])
         on_sale = {}
-        for rarity in self.settings.rarities:
+        for rarity in self.users.all_rarities():
             on_sale[rarity] = await self.client.market_scan(slugs, rarity)
             log.info("%s: %d/%d giocatori con carte in vendita", rarity, len(on_sale[rarity]), len(slugs))
         self.market.data = {"updated_at": now_ts(), "key": key, "on_sale": on_sale}
@@ -136,7 +153,7 @@ class SniperBot:
         """Giocatori e rarità con carte in vendita: le loro mediane vengono tenute aggiornate."""
         players = self.roster.data["players"]
         on_sale = self.market.data["on_sale"]
-        return [f"{slug}|{r}" for r in self.settings.rarities for slug in on_sale.get(r, {}) if slug in players]
+        return [f"{slug}|{r}" for r in self.users.all_rarities() for slug in on_sale.get(r, {}) if slug in players]
 
     def ref_for(self, key):
         """Prezzo di riferimento attuale (mediana pesata e ultime vendite), None se mai calcolato."""
@@ -261,7 +278,7 @@ class SniperBot:
             return None  # pacchetti di più carte o scambi carta-contro-carta
         card = cards[0]
         if (card["anyPlayer"]["slug"] not in self.roster.data["players"]
-                or card["rarityTyped"] not in self.settings.rarities or card["inSeasonEligible"]):
+                or card["rarityTyped"] not in self.users.all_rarities() or card["inSeasonEligible"]):
             return None
         return card
 
@@ -315,24 +332,41 @@ class SniperBot:
             return  # storico non disponibile al momento
         if now_ts() - entry.get("updated_at", 0) > config.STATS_REFRESH_HOURS * 3600:
             self._enqueue(key)  # storico vecchio: lo uso, ma intanto lo riscarico
-        if offer["id"] in self.notified.data or not self.rates:
+        if not self.rates:
             return
         price = to_eur(offer["receiverSide"]["amounts"], self.rates)
         ref = self.ref_for(key)
-        discount = evaluate_deal(price, ref, self.settings.discount_percent,
-                                 self.settings.min_discount_eur, config.MIN_SALES, config.RECENT_MAX_AGE_DAYS)
-        if discount is None:
-            return
-        name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
-        log.info("AFFARE: %s %s a %.2f € (-%.0f%%)", name, rarity, price, discount)
-        if self.settings.paused:
-            return
-        self.counters["deals"] += 1
-        text = self.deal_message(name, rarity, price, discount, ref, card)
-        message_id = await self.notifier.send(text)
-        if message_id is not None:
-            self.notified.data[offer["id"]] = {"ts": now_ts(), "msg_id": message_id, "text": text}
-            self.notified.save()
+        competitions = self.player_competitions(slug)
+        previous = self.notified.data.get(offer["id"])
+        if isinstance(previous, dict) and "msgs" in previous:
+            sent = previous["msgs"]
+        elif previous is not None:
+            sent = {self.users.admin_id: None}  # formato vecchio: era già stata notificata a te
+        else:
+            sent = {}
+        text = None
+        for chat_id, user in self.users.active():
+            # Ognuno con le sue regole: campionati, rarità, soglie, pausa.
+            if chat_id in sent or user.paused or rarity not in user.rarities:
+                continue
+            if "*" not in competitions and not competitions & set(user.competitions):
+                continue
+            discount = evaluate_deal(price, ref, user.discount_percent, user.min_discount_eur,
+                                     config.MIN_SALES, config.RECENT_MAX_AGE_DAYS)
+            if discount is None:
+                continue
+            if text is None:
+                name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
+                log.info("AFFARE: %s %s a %.2f € (-%.0f%%)", name, rarity, price, discount)
+                text = self.deal_message(name, rarity, price, discount, ref, card)
+            message_id = await self.notifier.send(text, chat_id)
+            if message_id is not None:
+                self.counters["deals"] += 1
+                entry = self.notified.data.get(offer["id"])
+                if not isinstance(entry, dict) or "msgs" not in entry:
+                    entry = self.notified.data[offer["id"]] = {"ts": now_ts(), "text": text, "msgs": {}}
+                entry["msgs"][chat_id] = message_id
+                self.notified.save()
 
     async def _mark_closed(self, offer_id, status):
         """Aggiorna la notifica di un affare quando qualcuno lo compra o viene ritirato."""
@@ -341,7 +375,9 @@ class SniperBot:
             return
         entry["closed"] = status
         self.notified.save()
-        await self.notifier.edit(entry["msg_id"], f"{entry['text']}\n\n<b>{CLOSED_LABEL[status]}</b>")
+        msgs = entry.get("msgs") or {self.users.admin_id: entry.get("msg_id")}  # vecchio formato: solo admin
+        for chat_id, message_id in msgs.items():
+            await self.notifier.edit(chat_id, message_id, f"{entry['text']}\n\n<b>{CLOSED_LABEL[status]}</b>")
 
     async def on_stream_offer(self, offer):
         await self.handle_offer(offer)
@@ -451,15 +487,18 @@ class SniperBot:
             await self.refresh_rates()
             await self.refresh_roster()
             await self.refresh_market()
+            admin = self.users.settings(self.users.admin_id)
+            others = len(self.users.active()) - 1
             await self.notifier.send(
                 f"🤖 <b>SorareBot avviato</b>\n"
-                f"Campionati: {html.escape(', '.join(self.settings.competitions))}\n"
-                f"Rarità: {', '.join(self.settings.rarities)}\n"
-                f"Giocatori: {len(self.roster.data['players'])} · mediane pronte: "
+                f"Campionati: {html.escape(', '.join(admin.competitions))}\n"
+                f"Rarità: {', '.join(admin.rarities)}\n"
+                f"Giocatori: {len(self.roster.data['players'])} · storici pronti: "
                 f"{self.ready_count()}/{len(self.all_keys())}\n"
-                f"Soglia: -{self.settings.discount_percent:g}% e almeno {self.settings.min_discount_eur:.2f} €\n"
+                f"Soglia: -{admin.discount_percent:g}% e almeno {admin.min_discount_eur:.2f} €\n"
                 f"Tempo reale: {'sì' if self.stream else 'no'} · /aiuto per i comandi"
-                + ("\n⏸ Notifiche in pausa (/riprendi)" if self.settings.paused else "")
+                + (f"\nAltri utenti: {others} (/utenti)" if others else "")
+                + ("\n⏸ Notifiche in pausa (/riprendi)" if admin.paused else "")
             )
             tasks.append(asyncio.create_task(self.maintenance_loop()))
             tasks.append(asyncio.create_task(self.ondemand_worker()))

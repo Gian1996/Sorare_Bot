@@ -39,11 +39,9 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 
 ## Comandi Telegram
 
-Il bot risponde solo alla chat in `CHAT_ID`.
-
 | Comando | Cosa fa |
 |---|---|
-| `/stato` | Tempo reale, mediane pronte, offerte viste, impostazioni |
+| `/stato` | Tempo reale, storici pronti, offerte viste, le tue impostazioni |
 | `/prezzo lautaro` | Prezzo di riferimento e ultime vendite di un giocatore |
 | `/soglia 25` | Sconto minimo in % |
 | `/minimo 2` | Risparmio minimo in € |
@@ -52,9 +50,21 @@ Il bot risponde solo alla chat in `CHAT_ID`.
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
 | `/reset` | Torna alle impostazioni di `config.py` |
 
-Le impostazioni cambiate da Telegram vengono salvate in `data/settings.json` e **vincono su `config.py`**.
-
 Slug dei campionati principali: `serie-a-it`, `premier-league-gb-eng`, `laliga-es`, `bundesliga-de`, `ligue-1-fr`, `primeira-liga-pt`.
+
+## Più utenti
+
+L'**amministratore** è la chat in `CHAT_ID` nel `.env`. Per far provare il bot a un amico:
+
+1. L'amico cerca il bot su Telegram e gli scrive `/start`.
+2. All'amministratore arriva la richiesta con nome e id: risponde `/approva <id>` oppure `/rifiuta <id>`.
+3. Da lì l'amico usa gli stessi comandi, ma sulle **sue** impostazioni: campionati, rarità, soglie e pausa sono di ognuno.
+
+Il bot monitora l'unione dei campionati e delle rarità scelte da tutti e manda a ciascuno solo gli affari che rispettano le sue regole. Chi non è approvato non riceve niente e non può usare i comandi.
+
+Comandi solo per l'amministratore: `/utenti` (elenco con le impostazioni di ognuno), `/approva <id>`, `/rifiuta <id>`, `/rimuovi <id>`.
+
+Utenti e impostazioni sono salvati in `data/users.json`. Le impostazioni cambiate da Telegram vincono su `config.py`.
 
 ## Accesso a Sorare
 
@@ -81,7 +91,7 @@ Senza API key funziona solo per brevi prove: il limite è di 20 chiamate/min e S
 - `main.py`: cuore del bot (rose, mediane, valutazione delle offerte, ciclo principale)
 - `realtime.py`: offerte in tempo reale dal websocket di Sorare
 - `commands.py`: comandi Telegram
-- `settings.py`: impostazioni modificabili da Telegram
+- `users.py`: utenti, approvazioni e impostazioni di ognuno
 - `sorare_api.py`: chiamate a Sorare, con limite di chiamate e retry
 - `pricing.py`: conversione in euro, mediana pesata, regola dell'affare
 - `notifier.py`: invio e modifica dei messaggi Telegram
