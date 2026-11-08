@@ -60,12 +60,15 @@ HISTORY_DAYS = 30           # finestra delle vendite Classic su cui calcolare la
 HISTORY_FALLBACK_DAYS = 90  # se in HISTORY_DAYS ci sono meno di MIN_SALES vendite, usa questa
 STATS_REFRESH_HOURS = 24    # ogni quanto ricalcolare la mediana di un giocatore
 ROSTER_REFRESH_HOURS = 24   # ogni quanto riscaricare le rose delle squadre
+MARKET_REFRESH_HOURS = 6    # ogni quanto ricontrollare quali giocatori hanno carte in vendita
+HISTORY_MAX_SALES = 100     # mediana sulle ultime N vendite al massimo (di solito 1 sola chiamata)
 HISTORY_MAX_PAGES = 10      # limite di sicurezza alle pagine di storico per giocatore
+STATS_CONCURRENCY = 3       # mediane calcolate in parallelo (il limite di chiamate resta 180/min)
 
 # --- RITMO --------------------------------------------------------------------
 REALTIME = True               # offerte in tempo reale via websocket (consigliato)
 CHECK_INTERVAL_SECONDS = 60   # controllo periodico delle offerte se il tempo reale è spento o caduto
-SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo, controllo di sicurezza ogni 5 minuti
+SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo: ogni quanto fare manutenzione (cambio, rose)
 OFFERS_BACKFILL_MINUTES = 5   # all'avvio, guarda anche le offerte degli ultimi N minuti
 OFFERS_MAX_PAGES = 100        # limite di sicurezza alle pagine di offerte per giro
 NOTIFIED_MEMORY_DAYS = 14     # per quanto ricordare le offerte già notificate

@@ -65,6 +65,7 @@ query TeamPlayers($slug: String!, $after: String) {
 OFFER_FIELDS = """
   id
   status
+  createdAt
   senderSide {
     anyCards {
       slug rarityTyped seasonYear serialNumber inSeasonEligible
@@ -91,6 +92,18 @@ query LiveOffers($since: ISO8601DateTime!, $first: Int!, $after: String) {
 OFFER_SUBSCRIPTION = """
 subscription OnOfferUpdated { tokenOfferWasUpdated(sports: [FOOTBALL]) { %s } }
 """ % OFFER_FIELDS
+
+# Carta più economica in vendita per giocatore (qualsiasi stagione: il filtro inSeason
+# viene ignorato da Sorare). Serve solo a sapere se c'è qualcosa sul mercato.
+MARKET_QUERY = """
+query Market($slugs: [String!], $rarity: Rarity) {
+  players(slugs: $slugs) {
+    slug
+    ... on Player { lowestPriceAnyCard(rarity: $rarity) { inSeasonEligible } }
+  }
+}
+"""
+MARKET_BATCH = 100  # massimo consentito da Sorare per players(slugs:)
 
 PRICE_HISTORY_QUERY = """
 query PriceHistory($slug: String!, $rarity: Rarity!, $since: ISO8601DateTime!, $last: Int!, $before: String) {
@@ -214,6 +227,24 @@ class SorareClient:
                 return players
             after = conn["pageInfo"]["endCursor"]
 
+    async def market_scan(self, slugs, rarity):
+        """Per ogni giocatore con carte in vendita: True se la più economica è Classic."""
+        on_sale = {}
+        for i in range(0, len(slugs), MARKET_BATCH):
+            batch = slugs[i:i + MARKET_BATCH]
+            try:
+                players = (await self.query(MARKET_QUERY, {"slugs": batch, "rarity": rarity}))["players"]
+            except SorareError as e:
+                # Un giocatore non valido fa fallire il lotto: nel dubbio li considero tutti in vendita.
+                log.warning("Controllo mercato fallito per un lotto (%s)", e)
+                on_sale.update({slug: False for slug in batch})
+                continue
+            for player in players:
+                card = player.get("lowestPriceAnyCard")
+                if card:
+                    on_sale[player["slug"]] = not card["inSeasonEligible"]
+        return on_sale
+
     async def live_offers_page(self, since_iso, page_size, after=None):
         """Una pagina di offerte di vendita. Restituisce (offerte, pageInfo)."""
         data = await self.query(LIVE_OFFERS_QUERY, {"since": since_iso, "first": page_size, "after": after})
@@ -221,9 +252,11 @@ class SorareClient:
         return conn["nodes"], conn["pageInfo"]
 
     async def price_history(self, slug, rarity, since_iso, page_size):
-        """Vendite Classic dal più recente al più vecchio, fino a `since_iso`."""
+        """Vendite Classic più recenti fino a `since_iso`, al massimo HISTORY_MAX_SALES."""
         sales, before = [], None
         for _ in range(config.HISTORY_MAX_PAGES):
+            if len(sales) >= config.HISTORY_MAX_SALES:
+                break  # per una mediana affidabile bastano le vendite più recenti
             data = await self.query(PRICE_HISTORY_QUERY, {
                 "slug": slug, "rarity": rarity, "since": since_iso, "last": page_size, "before": before,
             })

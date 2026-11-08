@@ -24,8 +24,10 @@ cp script/.env.example script/.env      # poi compila .env (token Telegram, API 
 ## Come funziona
 
 1. **Giocatori**: per ogni campionato scelto (di default Serie A, Premier League, LaLiga, Bundesliga, Ligue 1) scarica squadre e rose. Si aggiornano da sole ogni 24 ore.
-2. **Prezzo di riferimento**: per ogni giocatore e rarità calcola la **mediana** delle vendite Classic degli ultimi 30 giorni, o 90 se le vendite sono poche. Si ricalcola ogni 24 ore. Al primo avvio servono circa 45 minuti per tutte le mediane, ma i giocatori con offerte in arrivo vengono calcolati per primi.
-3. **Tempo reale**: resta collegato al websocket di Sorare e riceve ogni nuova offerta di vendita entro circa un secondo. Se la connessione cade si ricollega da solo. In più, ogni 5 minuti fa un controllo di sicurezza (ogni minuto se il tempo reale è scollegato).
+2. **Prezzo di riferimento**: per ogni giocatore e rarità calcola la **mediana** delle vendite Classic (le ultime 100 al massimo, negli ultimi 30 giorni, o 90 se sono poche). Le carte In Season non vengono mai mescolate con le Classic. Si ricalcola ogni 24 ore.
+   - Le mediane vengono preparate in anticipo solo per i giocatori che hanno carte in vendita (circa l'80%), a partire da quelli la cui carta più economica è Classic. Al primo avvio servono circa 30 minuti.
+   - Se arriva un'offerta per un giocatore senza mediana, il bot la calcola al volo in pochi secondi e poi valuta l'offerta: anche durante il primo avvio non si perdono affari.
+3. **Tempo reale**: resta collegato al websocket di Sorare e riceve ogni nuova offerta di vendita entro circa un secondo. Se la connessione cade si ricollega da solo e, finché è scollegato, controlla le offerte ogni minuto. Non usa sempre il controllo periodico perché il flusso periodico di Sorare a volte è in ritardo anche di un'ora.
 4. **Notifica**: se il prezzo è almeno il 20% sotto la mediana **e** costa almeno 1 € in meno, ti scrive su Telegram con il link alla carta.
 5. **Aggiornamento**: se la carta viene comprata o ritirata, il messaggio si aggiorna con "✅ Venduta", "❌ Ritirata" o "⌛ Scaduta".
 
@@ -63,7 +65,9 @@ Senza API key funziona solo per brevi prove: il limite è di 20 chiamate/min e S
 | `MIN_SALES` | `5` | Vendite minime per fidarsi della mediana |
 | `HISTORY_DAYS` / `HISTORY_FALLBACK_DAYS` | `30` / `90` | Finestra delle vendite |
 | `REALTIME` | `True` | Tempo reale via websocket |
-| `SAFETY_CHECK_SECONDS` | `300` | Controllo di sicurezza con il tempo reale attivo |
+| `HISTORY_MAX_SALES` | `100` | Mediana sulle ultime N vendite al massimo |
+| `STATS_CONCURRENCY` | `3` | Mediane calcolate in parallelo |
+| `MARKET_REFRESH_HOURS` | `6` | Ogni quanto ricontrollare chi ha carte in vendita |
 
 ## File
 

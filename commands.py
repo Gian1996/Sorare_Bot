@@ -58,8 +58,9 @@ def register(bot):
             f"{'⏸ Notifiche in pausa' if s.paused else '▶️ Notifiche attive'}\n"
             f"Tempo reale: {realtime}\n"
             f"Accesso Sorare: {bot.client.mode}\n"
-            f"Giocatori: {len(bot.roster.data['players'])} · mediane pronte {bot.ready_count()}/{total}"
-            f" ({len(bot.stale_keys())} da aggiornare)\n"
+            f"Giocatori: {len(bot.roster.data['players'])}\n"
+            f"Mediane pronte: {bot.ready_count()}/{total} giocatori×rarità con carte in vendita"
+            f" ({len(bot.stale_keys())} da aggiornare, {bot.ondemand.qsize()} in calcolo al volo)\n"
             f"Offerte viste: {c['offers']} · del campionato: {c['relevant']} · affari: {c['deals']}\n\n"
             f"Campionati: {html.escape(', '.join(s.competitions))}\n"
             f"Rarità: {', '.join(s.rarities)}\n"
@@ -80,7 +81,10 @@ def register(bot):
             lines.append(f"⚽ <b>{html.escape(players[slug])}</b>")
             for rarity in s.rarities:
                 st = bot.stats.data.get(f"{slug}|{rarity}")
-                if not st or "count" not in st:
+                on_sale = slug in bot.market.data["on_sale"].get(rarity, {})
+                if not st and not on_sale:
+                    lines.append(f"   {rarity}: nessuna carta in vendita (la calcolo al primo annuncio)")
+                elif not st or "count" not in st:
                     lines.append(f"   {rarity}: in calcolo")
                 elif st["count"] < config.MIN_SALES:
                     lines.append(f"   {rarity}: troppo poche vendite ({st['count']})")

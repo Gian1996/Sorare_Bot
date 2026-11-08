@@ -43,6 +43,8 @@ class SniperBot:
         self.notified = JsonStore(path("notified.json"), {})
         # roster: {"updated_at", "sources", "players": {slug: nome}}
         self.roster = JsonStore(path("roster.json"), {"updated_at": 0, "sources": [], "players": {}})
+        # market: {"updated_at", "key", "on_sale": {rarità: {slug: True se la più economica è Classic}}}
+        self.market = JsonStore(path("market.json"), {"updated_at": 0, "key": None, "on_sale": {}})
         self.stream = OfferStream(self.on_stream_offer, self.on_stream_connected) if config.REALTIME else None
         self.wake = asyncio.Event()
         self.rates = None
@@ -52,7 +54,11 @@ class SniperBot:
         self.history_page = 0
         self.started_at = now_ts()
         self.counters = {"offers": 0, "relevant": 0, "deals": 0}
-        self.priority = set()  # giocatori con offerte in arrivo ma senza mediana: calcolati per primi
+        # Calcolo al volo: offerte arrivate prima della mediana, in attesa di essere rivalutate.
+        self.pending = {}
+        self.ondemand = asyncio.Queue()
+        self.queued = set()
+        self.inflight = set()
         commands.register(self)
 
     # --- dati di base -------------------------------------------------------------
@@ -105,54 +111,114 @@ class SniperBot:
         self.roster.save()
         log.info("Giocatori monitorati: %d", len(players))
 
+    async def refresh_market(self):
+        """Quali giocatori hanno carte in vendita: le mediane si calcolano in anticipo solo per loro."""
+        key = f"{self.roster.data['updated_at']}|{','.join(sorted(self.settings.rarities))}"
+        fresh = now_ts() - self.market.data["updated_at"] < config.MARKET_REFRESH_HOURS * 3600
+        if fresh and self.market.data["key"] == key:
+            return
+        slugs = list(self.roster.data["players"])
+        on_sale = {}
+        for rarity in self.settings.rarities:
+            on_sale[rarity] = await self.client.market_scan(slugs, rarity)
+            log.info("%s: %d/%d giocatori con carte in vendita", rarity, len(on_sale[rarity]), len(slugs))
+        self.market.data = {"updated_at": now_ts(), "key": key, "on_sale": on_sale}
+        self.market.save()
+
     # --- mediane --------------------------------------------------------------------
 
     def all_keys(self):
-        return [f"{s}|{r}" for s in self.roster.data["players"] for r in self.settings.rarities]
+        """Giocatori e rarità con carte in vendita: le loro mediane vengono tenute aggiornate."""
+        players = self.roster.data["players"]
+        on_sale = self.market.data["on_sale"]
+        return [f"{slug}|{r}" for r in self.settings.rarities for slug in on_sale.get(r, {}) if slug in players]
 
     def ready_count(self):
         return sum(1 for k in self.all_keys() if self.stats.data.get(k, {}).get("count", 0) >= config.MIN_SALES)
 
     def stale_keys(self):
         cutoff = now_ts() - config.STATS_REFRESH_HOURS * 3600
-        keys = [(k not in self.priority, self.stats.data.get(k, {}).get("updated_at", 0), k)
-                for k in self.all_keys()]
-        # prima quelli con offerte in arrivo, poi i mai calcolati, poi i più vecchi
-        return [k for _, updated, k in sorted(keys) if updated < cutoff]
+        on_sale = self.market.data["on_sale"]
+
+        def order(key):
+            slug, rarity = key.split("|")
+            updated = self.stats.data.get(key, {}).get("updated_at", 0)
+            # prima i mai calcolati, tra questi chi ha una Classic come più economica, poi i più vecchi
+            return (updated > 0, not on_sale.get(rarity, {}).get(slug, False), updated)
+
+        stale = [k for k in self.all_keys()
+                 if k not in self.inflight and self.stats.data.get(k, {}).get("updated_at", 0) < cutoff]
+        return sorted(stale, key=order)
+
+    async def compute_key(self, key):
+        """Scarica lo storico di un giocatore e ne calcola la mediana, poi rivaluta le offerte in attesa."""
+        slug, rarity = key.split("|")
+        now = datetime.now(timezone.utc)
+        long_days = max(config.HISTORY_DAYS, config.HISTORY_FALLBACK_DAYS)
+        self.inflight.add(key)
+        try:
+            sales = await self._price_history(slug, rarity, iso_utc(now - timedelta(days=long_days)))
+        except SorareError as e:
+            log.warning("Storico di %s non disponibile: %s", slug, e)
+            self.stats.data[key] = {**self.stats.data.get(key, {}), "updated_at": now_ts()}
+            self.pending.pop(key, None)
+            return False
+        finally:
+            self.inflight.discard(key)
+        # Le date ISO in UTC si confrontano bene anche come stringhe.
+        recent_cutoff = iso_utc(now - timedelta(days=config.HISTORY_DAYS))
+        recent = [to_eur(s["amounts"], self.rates) for s in sales if s["date"] >= recent_cutoff]
+        stats, days = compute_stats(recent), config.HISTORY_DAYS
+        if stats["count"] < config.MIN_SALES and long_days > config.HISTORY_DAYS:
+            stats = compute_stats([to_eur(s["amounts"], self.rates) for s in sales])
+            days = long_days
+        self.stats.data[key] = {**stats, "days": days, "updated_at": now_ts()}
+        for offer in self.pending.pop(key, []):
+            await self.handle_offer(offer, retry=True)
+        return True
+
+    async def ondemand_worker(self):
+        """Calcola subito la mediana dei giocatori che ricevono offerte ma non ne hanno una."""
+        while True:
+            key = await self.ondemand.get()
+            self.queued.discard(key)
+            if key in self.inflight:
+                continue  # la sta già calcolando il giro normale, che poi rivaluta le offerte
+            try:
+                await self.compute_key(key)
+                self.stats.save()
+            except Exception:
+                log.exception("Errore nel calcolo al volo di %s", key)
+
+    def _enqueue(self, key):
+        if key not in self.queued and key not in self.inflight:
+            self.queued.add(key)
+            self.ondemand.put_nowait(key)
 
     async def refresh_stats(self, deadline):
         """Ricalcola le mediane scadute finché c'è tempo prima del prossimo giro."""
         stale = self.stale_keys()
         if not stale:
             return
-        now = datetime.now(timezone.utc)
-        long_days = max(config.HISTORY_DAYS, config.HISTORY_FALLBACK_DAYS)
-        since = iso_utc(now - timedelta(days=long_days))
-        recent_cutoff = iso_utc(now - timedelta(days=config.HISTORY_DAYS))
+        todo = iter(stale)
         done = 0
-        for key in stale:
-            if time.monotonic() >= deadline or self.wake.is_set():
-                break
-            slug, rarity = key.split("|")
-            try:
-                sales = await self._price_history(slug, rarity, since)
-            except SorareError as e:
-                log.warning("Storico di %s non disponibile: %s", slug, e)
-                self.stats.data[key] = {**self.stats.data.get(key, {}), "updated_at": now_ts()}
-                continue
-            # Le date ISO in UTC si confrontano bene anche come stringhe.
-            recent = [to_eur(s["amounts"], self.rates) for s in sales if s["date"] >= recent_cutoff]
-            stats, days = compute_stats(recent), config.HISTORY_DAYS
-            if stats["count"] < config.MIN_SALES and long_days > config.HISTORY_DAYS:
-                stats = compute_stats([to_eur(s["amounts"], self.rates) for s in sales])
-                days = long_days
-            self.stats.data[key] = {**stats, "days": days, "updated_at": now_ts()}
-            self.priority.discard(key)
-            done += 1
-            if done % 25 == 0:
-                self.stats.save()
-            if done % 100 == 0:
-                log.info("Mediane: %d calcolate, ne mancano %d", done, len(stale) - done)
+
+        async def worker():
+            # Più calcoli contemporanei: il limite di chiamate al minuto resta quello del client.
+            nonlocal done
+            for key in todo:
+                if time.monotonic() >= deadline or self.wake.is_set():
+                    return
+                if key in self.inflight:
+                    continue
+                await self.compute_key(key)
+                done += 1
+                if done % 25 == 0:
+                    self.stats.save()
+                if done % 100 == 0:
+                    log.info("Mediane: %d calcolate, ne mancano %d", done, len(stale) - done)
+
+        await asyncio.gather(*(worker() for _ in range(config.STATS_CONCURRENCY)))
         self.stats.save()
         total = len(self.all_keys())
         log.info("Mediane aggiornate: %d in questo giro, pronte %d/%d",
@@ -172,15 +238,16 @@ class SniperBot:
 
     # --- offerte ----------------------------------------------------------------------
 
-    async def handle_offer(self, offer):
-        """Valuta un'offerta (dal tempo reale o dal controllo periodico)."""
+    async def handle_offer(self, offer, retry=False):
+        """Valuta un'offerta (dal tempo reale, dal controllo periodico o dopo il calcolo al volo)."""
         status = offer.get("status")
         if status in CLOSED_LABEL:
             await self._mark_closed(offer["id"], status)
             return
         if status not in (None, "opened"):
             return
-        self.counters["offers"] += 1
+        if not retry:
+            self.counters["offers"] += 1
 
         cards = offer["senderSide"]["anyCards"]
         if len(cards) != 1 or offer["receiverSide"]["anyCards"]:
@@ -190,13 +257,22 @@ class SniperBot:
         names = self.roster.data["players"]
         if slug not in names or rarity not in self.settings.rarities or card["inSeasonEligible"]:
             return
-        self.counters["relevant"] += 1
+        if not retry:
+            self.counters["relevant"] += 1
 
         key = f"{slug}|{rarity}"
         stats = self.stats.data.get(key)
-        if not stats or "count" not in stats:
-            self.priority.add(key)
+        if stats is None:
+            # Nessuna mediana ancora: la calcolo subito e poi rivaluto questa offerta.
+            waiting = self.pending.setdefault(key, [])
+            if len(waiting) < 5:
+                waiting.append(offer)
+            self._enqueue(key)
             return
+        if "count" not in stats:
+            return  # storico non disponibile al momento
+        if now_ts() - stats.get("updated_at", 0) > config.STATS_REFRESH_HOURS * 3600:
+            self._enqueue(key)  # mediana vecchia: la uso, ma intanto la aggiorno
         if offer["id"] in self.notified.data or not self.rates:
             return
         price = to_eur(offer["receiverSide"]["amounts"], self.rates)
@@ -228,8 +304,7 @@ class SniperBot:
         await self.handle_offer(offer)
 
     async def on_stream_connected(self):
-        # Dopo una (ri)connessione recupero le offerte perse con un controllo immediato.
-        self.wake.set()
+        pass  # il ciclo di manutenzione si accorge da solo che il tempo reale è tornato
 
     async def poll_offers(self):
         """Controllo periodico: legge le offerte cambiate dall'ultimo giro."""
@@ -240,6 +315,11 @@ class SniperBot:
             since = self.last_poll - timedelta(seconds=60)  # margine: meglio rivedere che perdere
         offers = await self._live_offers(iso_utc(since))
         self.last_poll = poll_start
+        latest = max((o.get("createdAt") or "" for o in offers), default="")
+        if latest:
+            lag = (poll_start - datetime.strptime(latest, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc))
+            if lag > timedelta(minutes=15):
+                log.warning("Il flusso periodico di Sorare è in ritardo di %d minuti", lag.total_seconds() // 60)
         before = dict(self.counters)
         for offer in offers:
             await self.handle_offer(offer)
@@ -300,7 +380,14 @@ class SniperBot:
             try:
                 await self.refresh_rates()
                 await self.refresh_roster()
-                await self.poll_offers()
+                await self.refresh_market()
+                if realtime_ok:
+                    # Il tempo reale vede tutto: il flusso periodico di Sorare può essere in ritardo
+                    # anche di un'ora, quindi lo uso solo come piano B quando il websocket cade.
+                    self.last_poll = datetime.now(timezone.utc)
+                    self._prune_notified()
+                else:
+                    await self.poll_offers()
                 await self.refresh_stats(deadline)
             except SorareError as e:
                 log.error("Giro interrotto: %s", e)
@@ -316,16 +403,19 @@ class SniperBot:
         try:
             await self.refresh_rates()
             await self.refresh_roster()
+            await self.refresh_market()
             await self.notifier.send(
                 f"🤖 <b>SorareBot avviato</b>\n"
                 f"Campionati: {html.escape(', '.join(self.settings.competitions))}\n"
                 f"Rarità: {', '.join(self.settings.rarities)}\n"
-                f"Giocatori: {len(self.roster.data['players'])} · mediane pronte: {self.ready_count()}\n"
+                f"Giocatori: {len(self.roster.data['players'])} · mediane pronte: "
+                f"{self.ready_count()}/{len(self.all_keys())}\n"
                 f"Soglia: -{self.settings.discount_percent:g}% e almeno {self.settings.min_discount_eur:.2f} €\n"
                 f"Tempo reale: {'sì' if self.stream else 'no'} · /aiuto per i comandi"
                 + ("\n⏸ Notifiche in pausa (/riprendi)" if self.settings.paused else "")
             )
             tasks.append(asyncio.create_task(self.maintenance_loop()))
+            tasks.append(asyncio.create_task(self.ondemand_worker()))
             if self.stream:
                 tasks.append(asyncio.create_task(self.stream.run()))
             await asyncio.gather(*tasks)
