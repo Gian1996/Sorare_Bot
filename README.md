@@ -100,3 +100,21 @@ Senza API key funziona solo per brevi prove: il limite è di 20 chiamate/min e S
 ## Disclaimer
 
 Software a scopo personale. Il trading su Sorare comporta rischi finanziari, e l'uso dell'API è soggetto ai termini di Sorare.
+
+## Sul telefono (Termux), sempre acceso
+
+```bash
+./servizio.sh &          # avvia il bot e lo riavvia da solo se si ferma (log in logs/bot.log)
+tail -f logs/bot.log     # guarda cosa sta facendo (Ctrl+C per uscire, il bot resta acceso)
+./ferma.sh               # spegne il bot
+```
+
+Per farlo partire da solo quando il telefono si accende, installa l'app **Termux:Boot**
+(da F-Droid, aprila una volta) e crea `~/.termux/boot/sorare.sh`:
+
+```bash
+#!/data/data/com.termux/files/usr/bin/sh
+termux-wake-lock
+sleep 30   # aspetta che arrivi il Wi-Fi
+~/Sorare_bot/script/servizio.sh
+```
