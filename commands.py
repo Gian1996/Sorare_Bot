@@ -9,6 +9,7 @@ import html
 import time
 import unicodedata
 
+import bilancio as report
 import config
 from pricing import ago
 from sorare_api import SorareError
@@ -89,7 +90,8 @@ def register(bot):
             "/massimo <i>50</i> · prezzo massimo degli affari (0 = nessun limite)\n"
             "/rarita <i>limited rare</i> · rarità da monitorare\n"
             "/campionati <i>serie-a-it ...</i> · campionati da monitorare\n"
-            "/pausa · /riprendi · sospende le notifiche\n\n"
+            "/pausa · /riprendi · sospende le notifiche\n"
+            "/bilancio <i>7</i> · quanti avvisi sono stati comprati davvero e quanto in fretta\n\n"
             "<b>Watchlist</b> · avvisi su giocatori precisi, anche se non sono affari\n"
             "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 €\n"
             "/lista · giocatori seguiti\n"
@@ -299,6 +301,27 @@ def register(bot):
         return f"🗑 Non seguo più {html.escape(item['name'])} ({item['rarity']})."
 
     @for_users
+    async def bilancio(chat_id, s, args):
+        try:
+            days = int(args[0]) if args else config.NOTIFIED_MEMORY_DAYS
+            if not 1 <= days <= config.NOTIFIED_MEMORY_DAYS:
+                raise ValueError
+        except ValueError:
+            return (f"Uso: <code>/bilancio</code> (ultimi {config.NOTIFIED_MEMORY_DAYS} giorni) "
+                    f"o <code>/bilancio 7</code> (da 1 a {config.NOTIFIED_MEMORY_DAYS})")
+        since = time.time() - days * 86400
+        mine = {oid: e for oid, e in bot.notified.data.items()
+                if isinstance(e, dict) and e.get("ts", 0) >= since
+                and chat_id in report.recipients(e, users.admin_id)}
+        note = ""
+        try:
+            if await report.refresh_outcomes(bot.client, mine):
+                bot.notified.save()
+        except SorareError as e:
+            note = f"\n\n⚠️ Sorare non risponde ({html.escape(str(e)[:80])}): esiti forse non aggiornati."
+        return report.summary(report.rows(mine, chat_id, users.admin_id, since), days) + note
+
+    @for_users
     async def rarita(chat_id, s, args):
         values = [a.lower().replace("-", "_") for a in args]
         wrong = [v for v in values if v not in VALID_RARITIES]
@@ -409,6 +432,7 @@ def register(bot):
     n.add_command("segui", "Segui un giocatore sotto un prezzo", segui)
     n.add_command("lista", "Giocatori seguiti", lista)
     n.add_command("nonseguire", "Smetti di seguire un giocatore", nonseguire)
+    n.add_command("bilancio", "Quanti avvisi sono stati comprati", bilancio)
     n.add_command("rarita", "Rarità da monitorare", rarita)
     n.add_command("campionati", "Campionati da monitorare", campionati)
     n.add_command("pausa", "Sospendi le notifiche", pausa)

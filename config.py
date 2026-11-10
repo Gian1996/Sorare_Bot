@@ -80,7 +80,7 @@ CHECK_INTERVAL_SECONDS = 60   # controllo periodico delle offerte se il tempo re
 SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo: ogni quanto fare manutenzione (cambio, rose)
 OFFERS_BACKFILL_MINUTES = 5   # all'avvio, guarda anche le offerte degli ultimi N minuti
 OFFERS_MAX_PAGES = 100        # limite di sicurezza alle pagine di offerte per giro
-NOTIFIED_MEMORY_DAYS = 14     # per quanto ricordare le offerte già notificate
+NOTIFIED_MEMORY_DAYS = 30     # per quanto ricordare le offerte notificate (e quindi il /bilancio)
 
 # Cartella dove il bot salva il suo stato (mediane, notifiche inviate, rose).
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")

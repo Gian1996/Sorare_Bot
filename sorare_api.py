@@ -122,6 +122,14 @@ PLAYER_QUERY = """
 query Player($slug: String!) { anyPlayer(slug: $slug) { slug displayName } }
 """
 
+# Stato attuale di offerte già viste (anche chiuse da tempo). Vuole gli id senza "SingleSaleOffer:".
+OFFERS_STATUS_QUERY = """
+query OffersStatus($ids: [String!]!) {
+  tokens { offers(ids: $ids) { id status startDate endDate acceptedAt cancelledAt } }
+}
+"""
+OFFERS_BATCH = 40
+
 class SorareClient:
     def __init__(self):
         self.http = httpx.AsyncClient(
@@ -237,6 +245,15 @@ class SorareClient:
             return (await self.query(PLAYER_QUERY, {"slug": slug})).get("anyPlayer")
         except SorareError:
             return None  # slug inesistente (o Sorare non risponde)
+
+    async def offers_status(self, ids):
+        """{id offerta: {status, startDate, endDate, acceptedAt, cancelledAt}}; gli id inesistenti mancano."""
+        found = {}
+        for i in range(0, len(ids), OFFERS_BATCH):
+            batch = [offer_id.split(":", 1)[-1] for offer_id in ids[i:i + OFFERS_BATCH]]
+            data = await self.query(OFFERS_STATUS_QUERY, {"ids": batch})
+            found.update({o["id"]: o for o in data["tokens"]["offers"]})
+        return found
 
     async def market_scan(self, slugs, rarity):
         """Per ogni giocatore con carte in vendita: True se la più economica è Classic."""

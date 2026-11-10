@@ -49,10 +49,22 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 | `/rarita limited rare` | Rarità da monitorare (`limited`, `rare`, `super_rare`, `unique`) |
 | `/campionati serie-a-it laliga-es` | Campionati da monitorare (slug Sorare) |
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
+| `/bilancio 7` | Quanti avvisi sono stati comprati davvero e quanto in fretta |
 | `/reset` | Torna alle impostazioni di `config.py` (la watchlist resta) |
 | `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno |
 | `/lista` | Giocatori seguiti, con il loro prezzo di riferimento |
 | `/nonseguire 2` | Smetti di seguire un giocatore (numero da `/lista`, o il nome) |
+
+### Bilancio
+
+`/bilancio` (o `/bilancio 7` per gli ultimi 7 giorni) dice com'è andata con gli avvisi che hai ricevuto negli ultimi 30 giorni:
+
+- quante carte segnalate sono state **comprate**, ritirate, scadute o sono ancora in vendita;
+- quanto in fretta sono state comprate dopo l'avviso (entro 1 min, 10 min, 1 ora...);
+- quanto **ritardo** hanno gli avvisi rispetto alla messa in vendita (col tempo reale sono pochi secondi);
+- la percentuale di comprate per fascia di sconto (sotto il 30%, 30-50%, oltre il 50%) e per la watchlist.
+
+L'esito di ogni offerta viene chiesto a Sorare, quindi è giusto anche per le offerte chiuse mentre il bot era spento. Serve a regolare `/soglia`: se le carte segnalate vengono comprate in pochi minuti erano affari veri; se restano in vendita per ore o vengono ritirate, la soglia è troppo bassa.
 
 ### Watchlist
 

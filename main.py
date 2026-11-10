@@ -367,7 +367,7 @@ class SniperBot:
                 name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
                 log.info("AFFARE: %s %s a %.2f € (-%.0f%%)", name, rarity, price, discount)
                 text = self.deal_message(name, rarity, price, discount, ref, card)
-            if await self._send_alert(offer["id"], chat_id, text):
+            if await self._send_alert(offer["id"], chat_id, text, "deal", price, discount):
                 self.counters["deals"] += 1
 
     async def _watch_alerts(self, offer, card, key, watchers):
@@ -386,7 +386,8 @@ class SniperBot:
             log.info("WATCHLIST: %s %s a %.2f € (limite %.2f €) per %s", name, card["rarityTyped"],
                      price, limit, chat_id)
             text = self.watch_message(name, card["rarityTyped"], price, limit, ref, card)
-            if await self._send_alert(offer["id"], chat_id, text):
+            discount = (ref["median"] - price) / ref["median"] * 100 if ref and ref.get("median") else None
+            if await self._send_alert(offer["id"], chat_id, text, "watch", price, discount):
                 self.counters["watch"] = self.counters.get("watch", 0) + 1
 
     def _sent_to(self, offer_id):
@@ -398,15 +399,18 @@ class SniperBot:
             return {self.users.admin_id: None}  # formato vecchio: era già stata notificata a te
         return {}
 
-    async def _send_alert(self, offer_id, chat_id, text):
-        """Invia una notifica e la ricorda, per aggiornarla quando la carta viene venduta."""
+    async def _send_alert(self, offer_id, chat_id, text, kind, price, discount):
+        """Invia una notifica e la ricorda, per aggiornarla quando la carta viene venduta e per /bilancio."""
         message_id = await self.notifier.send(text, chat_id)
         if message_id is None:
             return False
         entry = self.notified.data.get(offer_id)
         if not isinstance(entry, dict) or "msgs" not in entry:
-            entry = self.notified.data[offer_id] = {"ts": now_ts(), "text": text, "msgs": {}}
+            entry = self.notified.data[offer_id] = {"ts": now_ts(), "text": text, "msgs": {},
+                                                    "price": round(price, 2), "discount": discount}
         entry["msgs"][chat_id] = message_id
+        if kind != "deal":
+            entry.setdefault("kinds", {})[chat_id] = kind
         if text != entry["text"]:
             entry.setdefault("texts", {})[chat_id] = text  # watchlist e affare hanno testi diversi
         self.notified.save()
