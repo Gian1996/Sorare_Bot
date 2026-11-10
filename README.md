@@ -153,7 +153,11 @@ Senza API key funziona solo per brevi prove: il limite è di 20 chiamate/min e S
 - `users.py`: utenti, approvazioni e impostazioni di ognuno
 - `sorare_api.py`: chiamate a Sorare, con limite di chiamate e retry
 - `pricing.py`: conversione in euro, mediana pesata, regola dell'affare
-- `notifier.py`: invio e modifica dei messaggi Telegram
+- `notifier.py`: invio e modifica dei messaggi Telegram, pulsanti sotto le notifiche
+- `bilancio.py`: esiti delle offerte notificate (/bilancio)
+- `summary.py`: riepilogo giornaliero (/riepilogo)
+- `alerts.py`: avvisi all'amministratore e segno di vita (data/heartbeat.json)
+- `logview.py`: lettura di logs/bot.log per /log
 - `storage.py`: salvataggio dello stato in `data/`
 
 ## Disclaimer
@@ -163,7 +167,7 @@ Software a scopo personale. Il trading su Sorare comporta rischi finanziari, e l
 ## Sul telefono (Termux), sempre acceso
 
 ```bash
-./servizio.sh &          # avvia il bot e lo riavvia da solo se si ferma (log in logs/bot.log)
+nohup ./servizio.sh > /dev/null 2>&1 &   # avvia il bot e lo riavvia da solo se si ferma (log in logs/bot.log)
 tail -f logs/bot.log     # guarda cosa sta facendo (Ctrl+C per uscire, il bot resta acceso)
 ./ferma.sh               # spegne il bot
 ```
@@ -177,3 +181,16 @@ termux-wake-lock
 sleep 30   # aspetta che arrivi il Wi-Fi
 ~/Sorare_bot/script/servizio.sh
 ```
+
+### Aggiornare il bot sul telefono
+
+```bash
+cd ~/Sorare_bot/script
+./ferma.sh                                   # spegne il bot (se è acceso)
+git pull                                     # scarica la versione nuova
+../sorare/bin/pip install -r requirements.txt   # nuovi pacchetti, se ce ne sono
+nohup ./servizio.sh > /dev/null 2>&1 &       # riaccende il bot
+```
+
+Se `git pull` si lamenta di «local changes», hai modificato un file sul telefono: `git stash` mette da parte le modifiche, poi rifai `git pull`.
+
