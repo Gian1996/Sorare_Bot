@@ -6,10 +6,12 @@ Ogni comando riceve (chat_id, nome utente, argomenti) e restituisce un testo HTM
 - /utenti, /approva, /rifiuta, /rimuovi sono solo per l'amministratore (CHAT_ID nel .env).
 """
 import html
+import os
 import time
 import unicodedata
 
 import bilancio as report
+import logview
 from summary import parse_time
 import config
 from pricing import ago
@@ -110,6 +112,7 @@ def register(bot):
         if users.is_admin(chat_id):
             text += ("\n\n<b>Amministratore</b>\n"
                      "/utenti · elenco utenti\n"
+                     "/log <i>50</i> · ultime righe del log (<i>errori</i> solo i problemi, <i>file</i> tutto il file)\n"
                      "/approva <i>id</i> · /rifiuta <i>id</i> · /rimuovi <i>id</i>")
         return text
 
@@ -541,6 +544,32 @@ def register(bot):
         return "\n".join(lines)
 
     @for_admin
+    async def log_(args):
+        words = [a.lower() for a in args]
+        if "file" in words:
+            if not os.path.exists(config.LOG_FILE):
+                return _no_log()
+            size = os.path.getsize(config.LOG_FILE) / 1_000_000
+            if await bot.notifier.send_file(config.LOG_FILE, f"Log del bot ({size:.1f} MB)"):
+                return None  # il file è già la risposta
+            return "⚠️ Non sono riuscito a mandarti il file (guarda il log 🙃)."
+        only_problems = any(w in ("errori", "errore", "problemi") for w in words)
+        numbers = [int(w) for w in words if w.isdigit()]
+        n = max(1, min(numbers[0] if numbers else 20, 100))
+        lines = logview.tail(n, only_problems)
+        if lines is None:
+            return _no_log()
+        if not lines:
+            return "📜 Nessun avviso o errore nella parte recente del log ✅" if only_problems else "📜 Il log è vuoto."
+        title = f"Ultimi {'avvisi ed errori' if only_problems else 'eventi'} del log"
+        return (logview.as_message(lines, title)
+                + "\n<i>/log 50 · /log errori · /log file</i>")
+
+    def _no_log():
+        return ("Non trovo logs/bot.log: c'è solo se il bot è avviato con <code>servizio.sh</code> "
+                "(con <code>avvia.sh</code> il log va sul terminale).")
+
+    @for_admin
     async def approva(args):
         target = _target(args)
         if not target or users.status(target) != "pending":
@@ -591,6 +620,7 @@ def register(bot):
     n.add_command("riprendi", "Riattiva le notifiche", riprendi)
     n.add_command("reset", "Torna alle impostazioni predefinite", reset)
     n.add_command("utenti", "Elenco utenti", utenti, menu=False)
+    n.add_command("log", "Ultime righe del log", log_, menu=False)
     n.add_command("approva", "Approva un utente", approva, menu=False)
     n.add_command("rifiuta", "Rifiuta una richiesta", rimuovi, menu=False)
     n.add_command("rimuovi", "Rimuovi un utente", rimuovi, menu=False)

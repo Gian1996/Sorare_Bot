@@ -97,3 +97,5 @@ NOTIFIED_MEMORY_DAYS = 30     # per quanto ricordare le offerte notificate (e qu
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+# Log scritto da servizio.sh (per /log). Se avvii il bot con avvia.sh dal terminale non c'è.
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "bot.log")

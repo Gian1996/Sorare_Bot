@@ -101,7 +101,9 @@ L'**amministratore** è la chat in `CHAT_ID` nel `.env`. Per far provare il bot 
 
 Il bot monitora l'unione dei campionati e delle rarità scelte da tutti e manda a ciascuno solo gli affari che rispettano le sue regole. Chi non è approvato non riceve niente e non può usare i comandi.
 
-Comandi solo per l'amministratore: `/utenti` (elenco con le impostazioni di ognuno), `/approva <id>`, `/rifiuta <id>`, `/rimuovi <id>`.
+Comandi solo per l'amministratore: `/utenti` (elenco con le impostazioni di ognuno), `/approva <id>`, `/rifiuta <id>`, `/rimuovi <id>`, `/log`.
+
+`/log` mostra le ultime 20 righe di `logs/bot.log` (`/log 50` per vederne di più, fino a 100), `/log errori` solo avvisi, errori e riavvii, `/log file` manda tutto il file. Il log c'è solo se il bot è avviato con `servizio.sh`.
 
 Utenti e impostazioni sono salvati in `data/users.json`. Le impostazioni cambiate da Telegram vincono su `config.py`.
 

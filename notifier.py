@@ -1,5 +1,6 @@
 """Telegram: invio e modifica dei messaggi, comandi dalle chat private."""
 import logging
+import os
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -131,6 +132,21 @@ class Notifier:
         except TelegramError as e:
             log.error("Errore Telegram verso %s: %s", chat_id, e)
             return None
+
+    async def send_file(self, path, caption="", chat_id=None):
+        """Manda un file come documento. True se riuscito."""
+        chat_id = str(chat_id or self.admin_chat_id)
+        if self.dry_run:
+            log.info("[DRY RUN] File per %s: %s (%s)", chat_id, path, caption)
+            return True
+        try:
+            with open(path, "rb") as f:
+                await self.app.bot.send_document(chat_id=int(chat_id), document=f, caption=caption,
+                                                 filename=os.path.basename(path))
+            return True
+        except (TelegramError, OSError) as e:
+            log.error("Invio del file %s non riuscito: %s", path, e)
+            return False
 
     async def edit(self, chat_id, message_id, html_text, buttons=None):
         if self.dry_run or not message_id:
