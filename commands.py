@@ -139,6 +139,9 @@ def register(bot):
         )
         if users.is_admin(chat_id):
             text += f"\n\nAccesso Sorare: {bot.client.mode} · utenti abilitati: {len(users.active())} (/utenti)"
+            problems = bot.alerts.active()
+            text += ("\n\n<b>Problemi in corso</b>\n" + "\n\n".join(problems)) if problems else \
+                "\nProblemi in corso: nessuno ✅"
         return text
 
     @for_users

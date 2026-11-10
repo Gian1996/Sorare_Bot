@@ -96,6 +96,24 @@ Comandi solo per l'amministratore: `/utenti` (elenco con le impostazioni di ognu
 
 Utenti e impostazioni sono salvati in `data/users.json`. Le impostazioni cambiate da Telegram vincono su `config.py`.
 
+## Avvisi all'amministratore
+
+Il bot scrive all'amministratore (`CHAT_ID`) quando qualcosa non va, così sul telefono te ne accorgi senza aprire Termux:
+
+| Avviso | Quando |
+|---|---|
+| ⚠️ Ripartito dopo un arresto imprevisto | Al riavvio, se la volta prima non era stato fermato con `ferma.sh`. Dice da quanto era fermo e perché: «codice 137» vuol dire che l'ha chiuso Android; nessun codice vuol dire che si erano spenti il telefono o Termux. |
+| 🔴 Tempo reale scollegato | Il websocket resta scollegato più di 10 minuti (`REALTIME_ALERT_MINUTES`). |
+| ⚠️ Sorare rallenta il bot | Più di 10 risposte «troppe richieste» (429) in 10 minuti: di solito c'è un'altra copia del bot accesa con la stessa API key. |
+| ⚠️ Problemi a raggiungere Sorare | Più di 10 errori di rete o del server in 10 minuti. |
+| ⛔ API key rifiutata | Sorare risponde 401: la key è scaduta o cancellata. |
+| ⚠️ Aggiornamenti falliti | Il giro di aggiornamento fallisce 3 volte di fila. |
+| ⚠️ Un'altra copia del bot | Un altro processo usa lo stesso token Telegram (per esempio il bot rimasto acceso sul PC). |
+
+Ogni problema arriva una volta, viene ricordato ogni 6 ore se continua (`ALERT_REMIND_HOURS`) e quando si risolve arriva «✅ ... (problema durato X)». In `/stato` l'amministratore vede i problemi in corso. Quando lo fermi con `ferma.sh` o `Ctrl+C` il bot salva tutto e scrive «⏹ SorareBot fermato». Si spengono tutti con `ADMIN_ALERTS = False` in `config.py`.
+
+Se Android chiude Termux del tutto, nessuno può avvisarti finché non riparte: in quel caso lo scopri dal messaggio «Ripartito dopo un arresto imprevisto».
+
 ## Accesso a Sorare
 
 Il bot usa solo una **API key**, da mettere come `SORARE_API_KEY` nel `.env`. La crei su [sorare.com/settings/developer](https://sorare.com/settings/developer) (200 chiamate/min).

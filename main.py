@@ -3,11 +3,13 @@ import asyncio
 import html
 import logging
 import os
+import signal
 import time
 from datetime import datetime, timedelta, timezone
 
 import commands
 import config
+from alerts import AdminAlerts
 import watchlists
 from notifier import Notifier
 from pricing import ago, evaluate_deal, reference, to_eur
@@ -73,6 +75,8 @@ class SniperBot:
         self.ondemand = asyncio.Queue()
         self.queued = set()
         self.inflight = set()
+        self.alerts = AdminAlerts(self)
+        self.notifier.on_conflict = self.alerts.on_telegram_conflict
         commands.register(self)
 
     # --- dati di base -------------------------------------------------------------
@@ -568,17 +572,35 @@ class SniperBot:
                 else:
                     await self.poll_offers()
                 await self.refresh_stats(deadline)
+                self.alerts.cycle_ok()
             except SorareError as e:
                 log.error("Giro interrotto: %s", e)
+                self.alerts.cycle_failed(e)
             try:
                 await asyncio.wait_for(self.wake.wait(), max(5, deadline - time.monotonic()))
             except asyncio.TimeoutError:
                 pass
 
+    async def watchdog_loop(self):
+        """Ogni 30 secondi: segno di vita su file e avvisi all'amministratore."""
+        while True:
+            try:
+                await self.alerts.check()
+            except Exception:
+                log.exception("Errore nel controllo degli avvisi")
+            await asyncio.sleep(30)
+
     async def run(self):
+        # ferma.sh manda SIGTERM: chiudo bene (salvo i dati e ricordo che l'arresto era voluto).
+        main_task = asyncio.current_task()
+        try:
+            asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, main_task.cancel)
+        except (NotImplementedError, RuntimeError):
+            pass
         await self.client.authenticate()
         await self.notifier.start()
         tasks = []
+        clean = False
         try:
             await self.refresh_rates()
             await self.refresh_roster()
@@ -596,16 +618,24 @@ class SniperBot:
                 f"Tempo reale: {'sì' if self.stream else 'no'} · /aiuto per i comandi"
                 + (f"\nAltri utenti: {others} (/utenti)" if others else "")
                 + ("\n⏸ Notifiche in pausa (/riprendi)" if admin.paused else "")
+                + self.alerts.startup_note()
             )
             tasks.append(asyncio.create_task(self.maintenance_loop()))
             tasks.append(asyncio.create_task(self.ondemand_worker()))
+            tasks.append(asyncio.create_task(self.watchdog_loop()))
             if self.stream:
                 tasks.append(asyncio.create_task(self.stream.run()))
             await asyncio.gather(*tasks)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            clean = True
+            raise
         finally:
             for task in tasks:
                 task.cancel()
             self.stats.save()
+            if clean:
+                self.alerts.stopped_cleanly()
+                await self.notifier.send("⏹ <b>SorareBot fermato</b> (arresto voluto).")
             await self.notifier.stop()
             await self.client.close()
 
@@ -620,7 +650,7 @@ def main():
         logging.getLogger(noisy).setLevel(logging.WARNING)
     try:
         asyncio.run(SniperBot().run())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("Bot fermato.")
 
 

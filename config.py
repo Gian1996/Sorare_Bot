@@ -82,6 +82,11 @@ CHECK_INTERVAL_SECONDS = 60   # controllo periodico delle offerte se il tempo re
 SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo: ogni quanto fare manutenzione (cambio, rose)
 OFFERS_BACKFILL_MINUTES = 5   # all'avvio, guarda anche le offerte degli ultimi N minuti
 OFFERS_MAX_PAGES = 100        # limite di sicurezza alle pagine di offerte per giro
+# Avvisi all'amministratore (CHAT_ID): riavvii, tempo reale scollegato, problemi con Sorare o Telegram.
+ADMIN_ALERTS = True
+REALTIME_ALERT_MINUTES = 10   # avvisa se il tempo reale resta scollegato più di così
+API_ALERT_ERRORS = 10         # avvisa se ci sono più di tanti 429 (o errori di rete) in 10 minuti
+ALERT_REMIND_HOURS = 6        # se un problema continua, ricordalo ogni N ore
 NOTIFIED_MEMORY_DAYS = 30     # per quanto ricordare le offerte notificate (e quindi il /bilancio)
 
 # Cartella dove il bot salva il suo stato (mediane, notifiche inviate, rose).

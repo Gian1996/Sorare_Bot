@@ -11,13 +11,15 @@ LOG=logs/bot.log
 command -v termux-wake-lock >/dev/null && termux-wake-lock
 
 echo $$ > logs/servizio.pid
+CODICE=""   # codice d'uscita del giro prima: il bot lo usa per dire perché si era fermato
 while true; do
   # Se il log supera 5 MB lo archivia (tiene solo l'ultimo archivio)
   if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 5000000 ]; then
     mv "$LOG" "$LOG.1"
   fi
   echo "=== $(date '+%F %T') avvio del bot ===" >> "$LOG"
-  ./avvia.sh >> "$LOG" 2>&1
-  echo "=== $(date '+%F %T') bot fermo (codice $?), riavvio tra 30 secondi ===" >> "$LOG"
+  BOT_LAST_EXIT="$CODICE" ./avvia.sh >> "$LOG" 2>&1
+  CODICE=$?
+  echo "=== $(date '+%F %T') bot fermo (codice $CODICE), riavvio tra 30 secondi ===" >> "$LOG"
   sleep 30
 done

@@ -3,7 +3,7 @@ import logging
 
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
+from telegram.error import Conflict, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, filters
 
 log = logging.getLogger(__name__)
@@ -16,6 +16,7 @@ class Notifier:
         self.app = None if self.dry_run else Application.builder().token(token).build()
         self.commands = []
         self.callbacks = {}
+        self.on_conflict = None  # chiamata se un'altra copia del bot usa lo stesso token
         if self.dry_run:
             log.warning("Modalità DRY RUN: le notifiche vengono solo stampate a schermo, comandi disattivati")
 
@@ -53,7 +54,15 @@ class Notifier:
         except TelegramError as e:
             log.warning("Impossibile impostare il menu dei comandi: %s", e)
         await self.app.start()
-        await self.app.updater.start_polling(drop_pending_updates=True)
+        await self.app.updater.start_polling(drop_pending_updates=True, error_callback=self._polling_error)
+
+    def _polling_error(self, error):
+        if isinstance(error, Conflict):
+            log.warning("Un'altra copia del bot usa lo stesso token Telegram")
+            if self.on_conflict:
+                self.on_conflict()
+        else:
+            log.warning("Errore nel ricevere i comandi da Telegram: %s", error)
 
     async def stop(self):
         if not self.app:

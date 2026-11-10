@@ -7,6 +7,7 @@ Il bot non usa mai email e password del tuo account.
 import asyncio
 import logging
 import time
+from collections import deque
 
 import httpx
 
@@ -154,6 +155,8 @@ class SorareClient:
         self._lock = asyncio.Lock()
         self._next_slot = 0.0
         self._min_interval = 60 / CALLS_PER_MINUTE["anonimo"]
+        self.problems = deque(maxlen=500)  # (timestamp, "429" | "rete" | "5xx"): per gli avvisi
+        self.auth_failed = False
 
     @property
     def authenticated(self):
@@ -192,19 +195,24 @@ class SorareClient:
                     json={"query": query, "variables": variables or {}},
                 )
             except httpx.HTTPError as e:
+                self.problems.append((time.time(), "rete"))
                 delay = min(2 ** attempt * 2, 60)
                 log.warning("Errore di rete (%s), riprovo tra %ds", e, delay)
                 await asyncio.sleep(delay)
                 continue
 
             if resp.status_code == 429:
+                self.problems.append((time.time(), "429"))
                 delay = int(resp.headers.get("Retry-After", "30") or 30)
                 log.warning("Troppe richieste a Sorare, attendo %ds", delay)
                 await asyncio.sleep(delay)
                 continue
             if resp.status_code == 401:
+                self.auth_failed = True
                 raise SorareError("API key rifiutata da Sorare (401): controlla SORARE_API_KEY nel .env")
+            self.auth_failed = False
             if resp.status_code >= 500:
+                self.problems.append((time.time(), "5xx"))
                 delay = min(2 ** attempt * 2, 60)
                 log.warning("Sorare ha risposto %d, riprovo tra %ds", resp.status_code, delay)
                 await asyncio.sleep(delay)
