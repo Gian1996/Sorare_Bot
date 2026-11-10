@@ -52,11 +52,18 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 | `/stagioni classic inseason` | Classic, In Season o entrambe (di default solo Classic) |
 | `/campionati serie-a-it laliga-es` | Campionati da monitorare (slug Sorare) |
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
+| `/riepilogo 21:00` | Ora del riepilogo giornaliero (`off` per spegnerlo, `ora` per vederlo subito) |
 | `/bilancio 7` | Quanti avvisi sono stati comprati davvero e quanto in fretta |
 | `/reset` | Torna alle impostazioni di `config.py` (la watchlist resta) |
 | `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno (`inseason` in fondo per le In Season) |
 | `/lista` | Giocatori seguiti, con il loro prezzo di riferimento |
 | `/nonseguire 2` | Smetti di seguire un giocatore (numero da `/lista`, o il nome) |
+
+### Riepilogo giornaliero
+
+Ogni giorno alle 21:00 (ora italiana) il bot ti manda il riepilogo delle ultime 24 ore: quanti affari e avvisi della watchlist hai ricevuto, quanti sono stati comprati (esiti chiesti a Sorare) e il miglior affare del giorno con com'è finito. L'amministratore vede anche come è andato il bot: quanto è rimasto collegato il tempo reale, offerte viste, vendite registrate, riavvii imprevisti e problemi.
+
+Arriva anche nei giorni senza affari, quindi fa anche da conferma che il bot è vivo. `/riepilogo 8:30` cambia l'ora, `/riepilogo off` lo spegne, `/riepilogo ora` lo mostra subito. Ognuno ha il suo; l'ora predefinita è `DAILY_SUMMARY_TIME` in `config.py`.
 
 ### Bilancio
 

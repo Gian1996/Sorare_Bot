@@ -57,6 +57,7 @@ class AdminAlerts:
             return ""
         if previous.get("stopped"):
             return f"\n⏹ Era stato fermato {duration(now - previous['stopped'])} fa"
+        self.bot.summary.note_restart()
         code = os.getenv("BOT_LAST_EXIT", "").strip()
         if code:
             reason = EXIT_REASONS.get(code, f"uscito con codice {code}: guarda logs/bot.log")
@@ -149,8 +150,11 @@ class AdminAlerts:
             problem["text"] = text()
             remind = config.ALERT_REMIND_HOURS * 3600
             if problem["sent_at"] is None or now - problem["sent_at"] >= remind:
+                first = problem["sent_at"] is None
                 if await self.bot.notifier.send(problem["text"]) is not None:
                     problem["sent_at"] = now
+                    if first:
+                        self.bot.summary.note_problem(problem["text"])
                     log.warning("Avviso all'amministratore: %s", key)
         elif problem is not None:
             del self.problems[key]

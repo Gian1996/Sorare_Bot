@@ -82,6 +82,10 @@ CHECK_INTERVAL_SECONDS = 60   # controllo periodico delle offerte se il tempo re
 SAFETY_CHECK_SECONDS = 300    # con il tempo reale attivo: ogni quanto fare manutenzione (cambio, rose)
 OFFERS_BACKFILL_MINUTES = 5   # all'avvio, guarda anche le offerte degli ultimi N minuti
 OFFERS_MAX_PAGES = 100        # limite di sicurezza alle pagine di offerte per giro
+# Riepilogo giornaliero: ora predefinita (ognuno la cambia con /riepilogo, None = spento).
+DAILY_SUMMARY_TIME = "21:00"
+TIMEZONE = "Europe/Rome"
+
 # Avvisi all'amministratore (CHAT_ID): riavvii, tempo reale scollegato, problemi con Sorare o Telegram.
 ADMIN_ALERTS = True
 REALTIME_ALERT_MINUTES = 10   # avvisa se il tempo reale resta scollegato più di così

@@ -10,6 +10,7 @@ import time
 import unicodedata
 
 import bilancio as report
+from summary import parse_time
 import config
 from pricing import ago
 from sorare_api import SorareError
@@ -96,7 +97,8 @@ def register(bot):
             "/stagioni <i>classic inseason</i> · Classic, In Season o entrambe\n"
             "/campionati <i>serie-a-it ...</i> · campionati da monitorare\n"
             "/pausa · /riprendi · sospende le notifiche\n"
-            "/bilancio <i>7</i> · quanti avvisi sono stati comprati davvero e quanto in fretta\n\n"
+            "/bilancio <i>7</i> · quanti avvisi sono stati comprati davvero e quanto in fretta\n"
+            "/riepilogo <i>21:00</i> · riepilogo giornaliero (<i>off</i> per spegnerlo, <i>ora</i> per vederlo)\n\n"
             "<b>Watchlist</b> · avvisi su giocatori precisi, anche se non sono affari\n"
             "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 € (aggiungi <i>inseason</i> per le In Season)\n"
             "/lista · giocatori seguiti\n"
@@ -135,6 +137,7 @@ def register(bot):
             f"Rarità: {', '.join(s.rarities)} · {_seasons_label(s.seasons)}\n"
             f"Soglia: -{s.discount_percent:g}% e almeno {s.min_discount_eur:.2f} €\n"
             f"Prezzo massimo: {_max_label(s)}\n"
+            f"Riepilogo giornaliero: {('alle ' + s.summary_time) if s.summary_time else 'spento'}\n"
             f"Watchlist: {len(users.watchlist(chat_id))} giocatori (/lista)"
         )
         if users.is_admin(chat_id):
@@ -318,6 +321,24 @@ def register(bot):
                 f"({item['rarity']} {SEASON_LABEL[item.get('season', 'classic')]}).")
 
     @for_users
+    async def riepilogo(chat_id, s, args):
+        word = args[0].lower() if args else ""
+        if word in ("off", "no", "spento", "stop"):
+            s.set("summary_time", None)
+            return "🔕 Riepilogo giornaliero spento. Per riattivarlo: <code>/riepilogo 21:00</code>"
+        if word in ("ora", "adesso", "subito"):
+            return await bot.summary.build(chat_id)
+        when = parse_time(word) if word else None
+        if not when:
+            current = f"alle {s.summary_time}" if s.summary_time else "spento"
+            return (f"Riepilogo giornaliero: {current}.\n"
+                    "<code>/riepilogo 21:00</code> per cambiare ora · <code>/riepilogo off</code> per spegnerlo · "
+                    "<code>/riepilogo ora</code> per vederlo subito")
+        s.set("summary_time", when)
+        bot.summary.mark_sent_today_if_past(chat_id, when)
+        return f"✅ Ti mando il riepilogo ogni giorno alle {when}."
+
+    @for_users
     async def bilancio(chat_id, s, args):
         try:
             days = int(args[0]) if args else config.NOTIFIED_MEMORY_DAYS
@@ -467,6 +488,7 @@ def register(bot):
     n.add_command("segui", "Segui un giocatore sotto un prezzo", segui)
     n.add_command("lista", "Giocatori seguiti", lista)
     n.add_command("nonseguire", "Smetti di seguire un giocatore", nonseguire)
+    n.add_command("riepilogo", "Riepilogo giornaliero", riepilogo)
     n.add_command("bilancio", "Quanti avvisi sono stati comprati", bilancio)
     n.add_command("rarita", "Rarità da monitorare", rarita)
     n.add_command("stagioni", "Classic, In Season o entrambe", stagioni)

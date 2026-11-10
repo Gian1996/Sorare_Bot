@@ -47,6 +47,7 @@ def defaults():
         "min_discount_eur": float(config.MIN_DISCOUNT_EUR),
         "paused": False,
         "max_price_eur": 0.0,  # 0 = nessun limite
+        "summary_time": config.DAILY_SUMMARY_TIME,  # riepilogo giornaliero, None = spento
     }
 
 

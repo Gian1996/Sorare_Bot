@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import commands
 import config
 from alerts import AdminAlerts
+from summary import DailySummary
 import watchlists
 from notifier import Notifier
 from pricing import ago, evaluate_deal, reference, to_eur
@@ -75,6 +76,7 @@ class SniperBot:
         self.ondemand = asyncio.Queue()
         self.queued = set()
         self.inflight = set()
+        self.summary = DailySummary(self)
         self.alerts = AdminAlerts(self)
         self.notifier.on_conflict = self.alerts.on_telegram_conflict
         commands.register(self)
@@ -582,12 +584,14 @@ class SniperBot:
                 pass
 
     async def watchdog_loop(self):
-        """Ogni 30 secondi: segno di vita su file e avvisi all'amministratore."""
+        """Ogni 30 secondi: segno di vita su file, avvisi all'amministratore e riepiloghi giornalieri."""
         while True:
             try:
                 await self.alerts.check()
+                self.summary.tick()
+                await self.summary.check()
             except Exception:
-                log.exception("Errore nel controllo degli avvisi")
+                log.exception("Errore nel controllo di avvisi e riepiloghi")
             await asyncio.sleep(30)
 
     async def run(self):
