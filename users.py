@@ -16,6 +16,13 @@ SEASONS = ("classic", "in_season")
 SEASON_LABEL = {"classic": "Classic", "in_season": "In Season"}
 
 
+# Codici brevi per i pulsanti di Telegram (al massimo 64 caratteri di dati per pulsante).
+RARITY_CODE = {"limited": "l", "rare": "r", "super_rare": "s", "unique": "u"}
+SEASON_CODE = {"classic": "c", "in_season": "i"}
+CODE_RARITY = {v: k for k, v in RARITY_CODE.items()}
+CODE_SEASON = {v: k for k, v in SEASON_CODE.items()}
+
+
 def parse_season(word):
     """"classic", "in_season" oppure None: accetta inseason, in-season, is, classiche..."""
     w = word.lower().replace("-", "").replace("_", "")
@@ -161,6 +168,41 @@ class Users:
         item = self.watchlist(chat_id).pop(index)
         self.save()
         return item
+
+    def watch_remove_card(self, chat_id, slug, rarity, season):
+        """Toglie dalla watchlist un giocatore (rarità e stagione). Restituisce la voce tolta o None."""
+        items = self.watchlist(chat_id)
+        for i, item in enumerate(items):
+            if item["slug"] == slug and item["rarity"] == rarity and item.get("season", "classic") == season:
+                return self.watch_remove(chat_id, i)
+        return None
+
+    def is_watching(self, chat_id, slug, rarity, season):
+        return any(item["slug"] == slug and item["rarity"] == rarity and item.get("season", "classic") == season
+                   for item in self.data[str(chat_id)].get("watchlist", []))
+
+    # --- giocatori ignorati: niente affari su di loro (la watchlist vince) --------------
+
+    def ignored(self, chat_id):
+        """[{"slug", "name"}] dei giocatori ignorati dall'utente."""
+        return self.data[str(chat_id)].setdefault("ignored", [])
+
+    def is_ignored(self, chat_id, slug):
+        return any(item["slug"] == slug for item in self.data[str(chat_id)].get("ignored", []))
+
+    def ignore(self, chat_id, slug, name):
+        if not self.is_ignored(chat_id, slug):
+            self.ignored(chat_id).append({"slug": slug, "name": name})
+            self.save()
+
+    def unignore(self, chat_id, slug):
+        items = self.ignored(chat_id)
+        kept = [item for item in items if item["slug"] != slug]
+        if len(kept) != len(items):
+            self.data[str(chat_id)]["ignored"] = kept
+            self.save()
+            return True
+        return False
 
     def watchers(self, slug, rarity, season):
         """[(chat_id, impostazioni, prezzo massimo)] degli utenti abilitati che seguono questa carta."""

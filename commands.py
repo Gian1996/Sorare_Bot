@@ -14,7 +14,7 @@ from summary import parse_time
 import config
 from pricing import ago
 from sorare_api import SorareError
-from users import SEASON_LABEL, SEASONS, VALID_RARITIES, parse_season, stat_key
+from users import CODE_RARITY, CODE_SEASON, SEASON_LABEL, SEASONS, VALID_RARITIES, parse_season, stat_key
 
 NOT_ALLOWED = "🔒 Non sei abilitato. Scrivi /start per chiedere l'accesso."
 
@@ -102,7 +102,9 @@ def register(bot):
             "<b>Watchlist</b> · avvisi su giocatori precisi, anche se non sono affari\n"
             "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 € (aggiungi <i>inseason</i> per le In Season)\n"
             "/lista · giocatori seguiti\n"
-            "/nonseguire <i>2</i> · smetti di seguire (numero da /lista)\n\n"
+            "/nonseguire <i>2</i> · smetti di seguire (numero da /lista)\n"
+            "/ignorati · giocatori ignorati (anche dal pulsante 🔇 sotto gli affari)\n"
+            "/ignora <i>nome</i> · /nonignorare <i>2</i>\n\n"
             "/reset · torna alle impostazioni predefinite"
         )
         if users.is_admin(chat_id):
@@ -161,23 +163,26 @@ def register(bot):
         for slug in matches:
             lines.append(f"⚽ <b>{html.escape(players[slug])}</b>")
             for rarity, season in ((r, x) for r in s.rarities for x in s.seasons):
-                key = stat_key(slug, rarity, season)
-                entry = bot.stats.data.get(key)
-                ref = bot.ref_for(key)
-                rarity = f"{rarity} {SEASON_LABEL[season]}"
-                if not entry:
-                    bot._enqueue(key)
-                    lines.append(f"   {rarity}: lo scarico adesso, riprova tra qualche secondo")
-                elif ref is None:
-                    lines.append(f"   {rarity}: storico non disponibile al momento")
-                elif ref["count"] < config.MIN_SALES:
-                    lines.append(f"   {rarity}: troppo poche vendite ({ref['count']} in {config.HISTORY_DAYS}gg)")
-                else:
-                    recent = " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"])
-                    lines.append(f"   {rarity}: riferimento <b>{ref['median']:.2f} €</b> "
-                                 f"(mediana pesata, {ref['count']} vendite)\n"
-                                 f"      ultime: {recent}")
+                lines.append(_price_line(slug, rarity, season))
         return "\n".join(lines)
+
+    def _price_line(slug, rarity, season, last=0):
+        """Riferimento di un giocatore per rarità e stagione; `last` > 0 aggiunge le ultime N vendite."""
+        key = stat_key(slug, rarity, season)
+        entry = bot.stats.data.get(key)
+        ref = bot.ref_for(key)
+        label = f"{rarity} {SEASON_LABEL[season]}"
+        if not entry:
+            bot._enqueue(key)
+            return f"   {label}: lo scarico adesso, riprova tra qualche secondo"
+        if ref is None:
+            return f"   {label}: storico non disponibile al momento"
+        if ref["count"] < config.MIN_SALES:
+            return f"   {label}: troppo poche vendite ({ref['count']} in {config.HISTORY_DAYS}gg)"
+        sales = entry["sales"][:last] if last else ref["recent"]
+        recent = " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in sales)
+        return (f"   {label}: riferimento <b>{ref['median']:.2f} €</b> (mediana pesata, {ref['count']} vendite)\n"
+                f"      ultime: {recent}")
 
     @for_users
     async def soglia(chat_id, s, args):
@@ -359,6 +364,88 @@ def register(bot):
             note = f"\n\n⚠️ Sorare non risponde ({html.escape(str(e)[:80])}): esiti forse non aggiornati."
         return report.summary(report.rows(mine, chat_id, users.admin_id, since), days) + note
 
+    # --- giocatori ignorati --------------------------------------------------------------
+
+    @for_users
+    async def ignorati(chat_id, s, args):
+        items = users.ignored(chat_id)
+        if not items:
+            return ("Nessun giocatore ignorato. Tocca «🔇 Ignora giocatore» sotto un affare, "
+                    "oppure scrivi <code>/ignora nome</code>.")
+        lines = ["🔇 <b>Giocatori ignorati</b> (niente affari su di loro)"]
+        lines += [f"{i}. {html.escape(item['name'])}" for i, item in enumerate(items, 1)]
+        lines.append("\n/nonignorare <i>numero</i> per riattivarne uno")
+        return "\n".join(lines)
+
+    @for_users
+    async def ignora(chat_id, s, args):
+        if not args:
+            return "Uso: <code>/ignora nome</code> · niente più affari su quel giocatore (/ignorati per la lista)"
+        found, error = await _find_player(args)
+        if error:
+            return error
+        slug, name = found
+        users.ignore(chat_id, slug, name)
+        return f"🔇 Non ti avviso più per gli affari su {html.escape(name)}. /nonignorare per annullare."
+
+    @for_users
+    async def nonignorare(chat_id, s, args):
+        items = users.ignored(chat_id)
+        if not args:
+            return "Uso: <code>/nonignorare 2</code> (il numero è quello di /ignorati) o <code>/nonignorare nome</code>"
+        if len(args) == 1 and args[0].isdigit() and 0 < int(args[0]) <= len(items):
+            item = items[int(args[0]) - 1]
+        else:
+            query = _plain(" ".join(args))
+            matches = [it for it in items if query in _plain(it["name"]) or query in it["slug"]]
+            if len(matches) != 1:
+                return "Nessun giocatore ignorato corrisponde: guarda /ignorati."
+            item = matches[0]
+        users.unignore(chat_id, item["slug"])
+        return f"🔔 Di nuovo attivi gli affari su {html.escape(item['name'])}."
+
+    # --- pulsanti sotto le notifiche ----------------------------------------------------------
+
+    def for_buttons(fn):
+        async def wrapped(chat_id, message_id, args):
+            if not users.is_active(chat_id):
+                return {"toast": "🔒 Non sei abilitato."}
+            return await fn(chat_id, message_id, args)
+        return wrapped
+
+    def _refresh(chat_id, message_id):
+        entry = bot.find_alert(chat_id, message_id)
+        return {"buttons": bot.alert_buttons(entry, chat_id)} if entry else {}
+
+    def _card_name(chat_id, message_id, slug):
+        entry = bot.find_alert(chat_id, message_id) or {}
+        return (entry.get("card") or {}).get("name") or bot.roster.data["players"].get(slug, slug)
+
+    @for_buttons
+    async def button_prices(chat_id, message_id, args):
+        slug, rarity, season = args[0], CODE_RARITY.get(args[1], "limited"), CODE_SEASON.get(args[2], "classic")
+        name = _card_name(chat_id, message_id, slug)
+        return {"reply": f"📈 <b>{html.escape(name)}</b>\n{_price_line(slug, rarity, season, last=8)}"}
+
+    @for_buttons
+    async def button_ignore(chat_id, message_id, args):
+        name = _card_name(chat_id, message_id, args[0])
+        users.ignore(chat_id, args[0], name)
+        return {"toast": f"🔇 Niente più affari su {name}", **_refresh(chat_id, message_id)}
+
+    @for_buttons
+    async def button_unignore(chat_id, message_id, args):
+        users.unignore(chat_id, args[0])
+        name = _card_name(chat_id, message_id, args[0])
+        return {"toast": f"🔔 Di nuovo attivi gli affari su {name}", **_refresh(chat_id, message_id)}
+
+    @for_buttons
+    async def button_unwatch(chat_id, message_id, args):
+        slug, rarity, season = args[0], CODE_RARITY.get(args[1], "limited"), CODE_SEASON.get(args[2], "classic")
+        item = users.watch_remove_card(chat_id, slug, rarity, season)
+        toast = f"🗑 Non seguo più {item['name']}" if item else "Non era più nella watchlist"
+        return {"toast": toast, **_refresh(chat_id, message_id)}
+
     @for_users
     async def rarita(chat_id, s, args):
         values = [a.lower().replace("-", "_") for a in args]
@@ -490,6 +577,13 @@ def register(bot):
     n.add_command("nonseguire", "Smetti di seguire un giocatore", nonseguire)
     n.add_command("riepilogo", "Riepilogo giornaliero", riepilogo)
     n.add_command("bilancio", "Quanti avvisi sono stati comprati", bilancio)
+    n.add_command("ignorati", "Giocatori ignorati", ignorati)
+    n.add_command("ignora", "Ignora un giocatore", ignora, menu=False)
+    n.add_command("nonignorare", "Non ignorare più un giocatore", nonignorare, menu=False)
+    n.add_button("p", button_prices)
+    n.add_button("i", button_ignore)
+    n.add_button("u", button_unignore)
+    n.add_button("w", button_unwatch)
     n.add_command("rarita", "Rarità da monitorare", rarita)
     n.add_command("stagioni", "Classic, In Season o entrambe", stagioni)
     n.add_command("campionati", "Campionati da monitorare", campionati)

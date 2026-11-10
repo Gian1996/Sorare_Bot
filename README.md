@@ -35,7 +35,8 @@ cp script/.env.example script/.env      # poi compila .env (token Telegram, API 
    - il prezzo è almeno il 20% sotto il riferimento e costa almeno 1 € in meno;
    - il prezzo è sotto anche la mediana delle **ultime 3 vendite** (se le ultime vendite sono già tutte basse, il prezzo sta calando e non è un affare);
    - quelle ultime 3 vendite sono degli **ultimi 30 giorni** (se il giocatore vende troppo poco, non si sa quanto vale oggi).
-5. **Aggiornamento**: se la carta viene comprata o ritirata, il messaggio si aggiorna con "✅ Venduta", "❌ Ritirata" o "⌛ Scaduta".
+5. **Pulsanti** sotto ogni notifica: «🔗 Apri su Sorare», «📈 Prezzi» (riferimento e ultime 8 vendite di quel giocatore) e «🔇 Ignora giocatore» (niente più affari su di lui; il pulsante diventa «🔔 Non ignorare più» per annullare). Sotto gli avvisi della watchlist, al posto di Ignora c'è «🗑 Non seguire più».
+6. **Aggiornamento**: se la carta viene comprata o ritirata, il messaggio si aggiorna con "✅ Venduta", "❌ Ritirata" o "⌛ Scaduta".
 
 Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 
@@ -53,6 +54,7 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 | `/campionati serie-a-it laliga-es` | Campionati da monitorare (slug Sorare) |
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
 | `/riepilogo 21:00` | Ora del riepilogo giornaliero (`off` per spegnerlo, `ora` per vederlo subito) |
+| `/ignorati` | Giocatori ignorati (dal pulsante 🔇 o con `/ignora nome`); `/nonignorare 2` per riattivarne uno. La watchlist vince: chi segui ti arriva comunque |
 | `/bilancio 7` | Quanti avvisi sono stati comprati davvero e quanto in fretta |
 | `/reset` | Torna alle impostazioni di `config.py` (la watchlist resta) |
 | `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno (`inseason` in fondo per le In Season) |

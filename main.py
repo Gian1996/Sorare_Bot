@@ -17,7 +17,7 @@ from pricing import ago, evaluate_deal, reference, to_eur
 from realtime import OfferStream
 from sorare_api import ComplexityError, SorareClient, SorareError
 from storage import JsonStore
-from users import SEASON_LABEL, Users, parse_key, stat_key
+from users import RARITY_CODE, SEASON_CODE, SEASON_LABEL, Users, parse_key, stat_key
 
 log = logging.getLogger("sorarebot")
 
@@ -395,6 +395,8 @@ class SniperBot:
                 continue
             if user.max_price_eur and price > user.max_price_eur:
                 continue
+            if self.users.is_ignored(chat_id, slug):
+                continue
             discount = evaluate_deal(price, ref, user.discount_percent, user.min_discount_eur,
                                      config.MIN_SALES, config.RECENT_MAX_AGE_DAYS)
             if discount is None:
@@ -403,7 +405,8 @@ class SniperBot:
                 name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
                 log.info("AFFARE: %s %s %s a %.2f € (-%.0f%%)", name, rarity, season, price, discount)
                 text = self.deal_message(name, rarity, season, price, discount, ref, card)
-            if await self._send_alert(offer["id"], chat_id, text, "deal", price, discount):
+            info = self._card_info(card, season, name)
+            if await self._send_alert(offer["id"], chat_id, text, "deal", price, discount, info):
                 self.counters["deals"] += 1
 
     async def _watch_alerts(self, offer, card, season, key, watchers):
@@ -423,7 +426,8 @@ class SniperBot:
                      season, price, limit, chat_id)
             text = self.watch_message(name, card["rarityTyped"], season, price, limit, ref, card)
             discount = (ref["median"] - price) / ref["median"] * 100 if ref and ref.get("median") else None
-            if await self._send_alert(offer["id"], chat_id, text, "watch", price, discount):
+            info = self._card_info(card, season, name)
+            if await self._send_alert(offer["id"], chat_id, text, "watch", price, discount, info):
                 self.counters["watch"] = self.counters.get("watch", 0) + 1
 
     def _sent_to(self, offer_id):
@@ -435,15 +439,47 @@ class SniperBot:
             return {self.users.admin_id: None}  # formato vecchio: era già stata notificata a te
         return {}
 
-    async def _send_alert(self, offer_id, chat_id, text, kind, price, discount):
+    @staticmethod
+    def _card_info(card, season, name):
+        """Dati della carta salvati con la notifica: servono ai pulsanti sotto il messaggio."""
+        return {"slug": card["anyPlayer"]["slug"], "name": name, "rarity": card["rarityTyped"],
+                "season": season, "url": f"https://sorare.com/football/cards/{card['slug']}"}
+
+    def alert_buttons(self, entry, chat_id):
+        """Pulsanti sotto una notifica, secondo lo stato attuale (ignorato, seguito) per quell'utente."""
+        card = entry.get("card")
+        if not card:
+            return None  # notifiche di prima dei pulsanti
+        slug = card["slug"]
+        code = f"{slug}|{RARITY_CODE.get(card['rarity'], 'l')}|{SEASON_CODE.get(card['season'], 'c')}"
+        row = [("📈 Prezzi", f"p|{code}")]
+        if entry.get("kinds", {}).get(chat_id, "deal") == "watch":
+            if self.users.is_watching(chat_id, slug, card["rarity"], card["season"]):
+                row.append(("🗑 Non seguire più", f"w|{code}"))
+        elif self.users.is_ignored(chat_id, slug):
+            row.append(("🔔 Non ignorare più", f"u|{slug}"))
+        else:
+            row.append(("🔇 Ignora giocatore", f"i|{slug}"))
+        return [[("🔗 Apri su Sorare", card["url"])], row]
+
+    def find_alert(self, chat_id, message_id):
+        """La notifica (voce di notified.json) corrispondente a un messaggio Telegram."""
+        for entry in self.notified.data.values():
+            if isinstance(entry, dict) and (entry.get("msgs") or {}).get(chat_id) == message_id:
+                return entry
+        return None
+
+    async def _send_alert(self, offer_id, chat_id, text, kind, price, discount, info):
         """Invia una notifica e la ricorda, per aggiornarla quando la carta viene venduta e per /bilancio."""
-        message_id = await self.notifier.send(text, chat_id)
+        draft = {"card": info, "kinds": {chat_id: kind}}
+        message_id = await self.notifier.send(text, chat_id, self.alert_buttons(draft, chat_id))
         if message_id is None:
             return False
         entry = self.notified.data.get(offer_id)
         if not isinstance(entry, dict) or "msgs" not in entry:
             entry = self.notified.data[offer_id] = {"ts": now_ts(), "text": text, "msgs": {},
                                                     "price": round(price, 2), "discount": discount}
+        entry["card"] = info
         entry["msgs"][chat_id] = message_id
         if kind != "deal":
             entry.setdefault("kinds", {})[chat_id] = kind
@@ -462,7 +498,8 @@ class SniperBot:
         msgs = entry.get("msgs") or {self.users.admin_id: entry.get("msg_id")}  # vecchio formato: solo admin
         for chat_id, message_id in msgs.items():
             text = entry.get("texts", {}).get(chat_id, entry["text"])
-            await self.notifier.edit(chat_id, message_id, f"{text}\n\n<b>{CLOSED_LABEL[status]}</b>")
+            await self.notifier.edit(chat_id, message_id, f"{text}\n\n<b>{CLOSED_LABEL[status]}</b>",
+                                     self.alert_buttons(entry, chat_id))
 
     async def on_stream_offer(self, offer):
         await self.handle_offer(offer)
@@ -522,7 +559,6 @@ class SniperBot:
     @staticmethod
     def deal_message(name, rarity, eligibility, price, discount, ref, card):
         season = card["seasonYear"]
-        url = f"https://sorare.com/football/cards/{card['slug']}"
         recent = " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"])
         return (
             f"🚨 <b>Affare {RARITY_LABEL.get(rarity, rarity)} · {SEASON_LABEL[eligibility]}</b>\n"
@@ -530,14 +566,12 @@ class SniperBot:
             f"💶 Prezzo: <b>{price:.2f} €</b>\n"
             f"📊 Riferimento: {ref['median']:.2f} € (mediana pesata, {ref['count']} vendite)\n"
             f"🕒 Ultime vendite: {recent}\n"
-            f"📉 Sconto: <b>-{discount:.0f}%</b> ({ref['median'] - price:.2f} € in meno)\n"
-            f'🔗 <a href="{url}">Apri su Sorare</a>'
+            f"📉 Sconto: <b>-{discount:.0f}%</b> ({ref['median'] - price:.2f} € in meno)"
         )
 
     @staticmethod
     def watch_message(name, rarity, eligibility, price, limit, ref, card):
         season = card["seasonYear"]
-        url = f"https://sorare.com/football/cards/{card['slug']}"
         lines = [
             f"👀 <b>Watchlist · {RARITY_LABEL.get(rarity, rarity)} · {SEASON_LABEL[eligibility]}</b>",
             f"⚽ <b>{html.escape(name)}</b> · {season}-{str(season + 1)[-2:]} #{card['serialNumber']}",
@@ -548,7 +582,6 @@ class SniperBot:
             lines.append(f"📊 Riferimento: {ref['median']:.2f} € ({diff:+.0f}%, {ref['count']} vendite)")
         if ref and ref.get("recent"):
             lines.append("🕒 Ultime vendite: " + " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"]))
-        lines.append(f'🔗 <a href="{url}">Apri su Sorare</a>')
         return "\n".join(lines)
 
     # --- ciclo principale -------------------------------------------------------
