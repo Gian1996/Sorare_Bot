@@ -271,20 +271,22 @@ class SniperBot:
 
     # --- offerte ----------------------------------------------------------------------
 
-    def _monitored_card(self, offer):
-        """La carta dell'offerta se è una singola Classic di un giocatore e rarità monitorati."""
+    @staticmethod
+    def _classic_card(offer):
+        """La carta dell'offerta se è una singola carta Classic in vendita per soldi."""
         cards = offer["senderSide"]["anyCards"]
         if len(cards) != 1 or offer["receiverSide"]["anyCards"]:
             return None  # pacchetti di più carte o scambi carta-contro-carta
         card = cards[0]
-        if (card["anyPlayer"]["slug"] not in self.roster.data["players"]
-                or card["rarityTyped"] not in self.users.all_rarities() or card["inSeasonEligible"]):
-            return None
-        return card
+        return None if card["inSeasonEligible"] else card
+
+    def _is_monitored(self, slug, rarity):
+        """Giocatore e rarità controllati per gli affari (campionati e rarità degli utenti)."""
+        return slug in self.roster.data["players"] and rarity in self.users.all_rarities()
 
     def _record_sale(self, offer):
         """Una carta è stata venduta: aggiorno subito il prezzo di riferimento di quel giocatore."""
-        card = self._monitored_card(offer)
+        card = self._classic_card(offer)
         if not card or offer["id"] in self.seen_sales or not self.rates:
             return
         price = to_eur(offer["receiverSide"]["amounts"], self.rates)
@@ -312,14 +314,24 @@ class SniperBot:
         if not retry:
             self.counters["offers"] += 1
 
-        card = self._monitored_card(offer)
+        card = self._classic_card(offer)
         if not card:
             return
         slug, rarity = card["anyPlayer"]["slug"], card["rarityTyped"]
+        key = f"{slug}|{rarity}"
+        watchers = self.users.watchers(slug, rarity)
+        monitored = self._is_monitored(slug, rarity)
+        if not watchers and not monitored:
+            return
         if not retry:
             self.counters["relevant"] += 1
 
-        key = f"{slug}|{rarity}"
+        if watchers and self.rates:
+            # Watchlist: basta che il prezzo sia sotto il limite scelto, non serve lo storico.
+            await self._watch_alerts(offer, card, key, watchers)
+        if not monitored:
+            return
+
         entry = self.stats.data.get(key)
         if entry is None:
             # Nessuno storico ancora: lo scarico subito e poi rivaluto questa offerta.
@@ -337,19 +349,15 @@ class SniperBot:
         price = to_eur(offer["receiverSide"]["amounts"], self.rates)
         ref = self.ref_for(key)
         competitions = self.player_competitions(slug)
-        previous = self.notified.data.get(offer["id"])
-        if isinstance(previous, dict) and "msgs" in previous:
-            sent = previous["msgs"]
-        elif previous is not None:
-            sent = {self.users.admin_id: None}  # formato vecchio: era già stata notificata a te
-        else:
-            sent = {}
+        sent = self._sent_to(offer["id"])
         text = None
         for chat_id, user in self.users.active():
-            # Ognuno con le sue regole: campionati, rarità, soglie, pausa.
+            # Ognuno con le sue regole: campionati, rarità, soglie, prezzo massimo, pausa.
             if chat_id in sent or user.paused or rarity not in user.rarities:
                 continue
             if "*" not in competitions and not competitions & set(user.competitions):
+                continue
+            if user.max_price_eur and price > user.max_price_eur:
                 continue
             discount = evaluate_deal(price, ref, user.discount_percent, user.min_discount_eur,
                                      config.MIN_SALES, config.RECENT_MAX_AGE_DAYS)
@@ -359,14 +367,50 @@ class SniperBot:
                 name = card["anyPlayer"]["displayName"] or self.roster.data["players"].get(slug, slug)
                 log.info("AFFARE: %s %s a %.2f € (-%.0f%%)", name, rarity, price, discount)
                 text = self.deal_message(name, rarity, price, discount, ref, card)
-            message_id = await self.notifier.send(text, chat_id)
-            if message_id is not None:
+            if await self._send_alert(offer["id"], chat_id, text):
                 self.counters["deals"] += 1
-                entry = self.notified.data.get(offer["id"])
-                if not isinstance(entry, dict) or "msgs" not in entry:
-                    entry = self.notified.data[offer["id"]] = {"ts": now_ts(), "text": text, "msgs": {}}
-                entry["msgs"][chat_id] = message_id
-                self.notified.save()
+
+    async def _watch_alerts(self, offer, card, key, watchers):
+        price = to_eur(offer["receiverSide"]["amounts"], self.rates)
+        if price is None:
+            return
+        entry = self.stats.data.get(key)
+        if not entry or now_ts() - entry.get("updated_at", 0) > config.STATS_REFRESH_HOURS * 3600:
+            self._enqueue(key)  # così /lista e i prossimi avvisi mostrano anche il riferimento
+        sent = self._sent_to(offer["id"])
+        ref = self.ref_for(key)
+        for chat_id, user, limit in watchers:
+            if chat_id in sent or user.paused or price > limit:
+                continue
+            name = card["anyPlayer"]["displayName"] or card["anyPlayer"]["slug"]
+            log.info("WATCHLIST: %s %s a %.2f € (limite %.2f €) per %s", name, card["rarityTyped"],
+                     price, limit, chat_id)
+            text = self.watch_message(name, card["rarityTyped"], price, limit, ref, card)
+            if await self._send_alert(offer["id"], chat_id, text):
+                self.counters["watch"] = self.counters.get("watch", 0) + 1
+
+    def _sent_to(self, offer_id):
+        """{chat_id: id messaggio} di chi ha già ricevuto questa offerta."""
+        previous = self.notified.data.get(offer_id)
+        if isinstance(previous, dict) and "msgs" in previous:
+            return previous["msgs"]
+        if previous is not None:
+            return {self.users.admin_id: None}  # formato vecchio: era già stata notificata a te
+        return {}
+
+    async def _send_alert(self, offer_id, chat_id, text):
+        """Invia una notifica e la ricorda, per aggiornarla quando la carta viene venduta."""
+        message_id = await self.notifier.send(text, chat_id)
+        if message_id is None:
+            return False
+        entry = self.notified.data.get(offer_id)
+        if not isinstance(entry, dict) or "msgs" not in entry:
+            entry = self.notified.data[offer_id] = {"ts": now_ts(), "text": text, "msgs": {}}
+        entry["msgs"][chat_id] = message_id
+        if text != entry["text"]:
+            entry.setdefault("texts", {})[chat_id] = text  # watchlist e affare hanno testi diversi
+        self.notified.save()
+        return True
 
     async def _mark_closed(self, offer_id, status):
         """Aggiorna la notifica di un affare quando qualcuno lo compra o viene ritirato."""
@@ -377,7 +421,8 @@ class SniperBot:
         self.notified.save()
         msgs = entry.get("msgs") or {self.users.admin_id: entry.get("msg_id")}  # vecchio formato: solo admin
         for chat_id, message_id in msgs.items():
-            await self.notifier.edit(chat_id, message_id, f"{entry['text']}\n\n<b>{CLOSED_LABEL[status]}</b>")
+            text = entry.get("texts", {}).get(chat_id, entry["text"])
+            await self.notifier.edit(chat_id, message_id, f"{text}\n\n<b>{CLOSED_LABEL[status]}</b>")
 
     async def on_stream_offer(self, offer):
         await self.handle_offer(offer)
@@ -448,6 +493,23 @@ class SniperBot:
             f"📉 Sconto: <b>-{discount:.0f}%</b> ({ref['median'] - price:.2f} € in meno)\n"
             f'🔗 <a href="{url}">Apri su Sorare</a>'
         )
+
+    @staticmethod
+    def watch_message(name, rarity, price, limit, ref, card):
+        season = card["seasonYear"]
+        url = f"https://sorare.com/football/cards/{card['slug']}"
+        lines = [
+            f"👀 <b>Watchlist · {RARITY_LABEL.get(rarity, rarity)}</b>",
+            f"⚽ <b>{html.escape(name)}</b> · {season}-{str(season + 1)[-2:]} #{card['serialNumber']}",
+            f"💶 Prezzo: <b>{price:.2f} €</b> (il tuo limite: {limit:.2f} €)",
+        ]
+        if ref and ref.get("median"):
+            diff = (price - ref["median"]) / ref["median"] * 100
+            lines.append(f"📊 Riferimento: {ref['median']:.2f} € ({diff:+.0f}%, {ref['count']} vendite)")
+        if ref and ref.get("recent"):
+            lines.append("🕒 Ultime vendite: " + " · ".join(f"{p:.2f} € ({ago(ts)})" for ts, p in ref["recent"]))
+        lines.append(f'🔗 <a href="{url}">Apri su Sorare</a>')
+        return "\n".join(lines)
 
     # --- ciclo principale -------------------------------------------------------
 

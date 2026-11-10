@@ -45,10 +45,24 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 | `/prezzo lautaro` | Prezzo di riferimento e ultime vendite di un giocatore |
 | `/soglia 25` | Sconto minimo in % |
 | `/minimo 2` | Risparmio minimo in € |
+| `/massimo 50` | Prezzo massimo degli affari (`/massimo 0` = nessun limite) |
 | `/rarita limited rare` | Rarità da monitorare (`limited`, `rare`, `super_rare`, `unique`) |
 | `/campionati serie-a-it laliga-es` | Campionati da monitorare (slug Sorare) |
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
-| `/reset` | Torna alle impostazioni di `config.py` |
+| `/reset` | Torna alle impostazioni di `config.py` (la watchlist resta) |
+| `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno |
+| `/lista` | Giocatori seguiti, con il loro prezzo di riferimento |
+| `/nonseguire 2` | Smetti di seguire un giocatore (numero da `/lista`, o il nome) |
+
+### Watchlist
+
+Con `/segui` il bot ti avvisa per un giocatore preciso appena una sua carta Classic va in vendita sotto il prezzo che scegli, **anche se non è un affare** rispetto alla mediana: per esempio se ti serve per la squadra e sai già quanto vuoi spendere.
+
+- La rarità si può omettere se ne monitori una sola (es. solo `limited`).
+- Se il nome è ambiguo (`/segui lautaro`), il bot ti mostra gli slug tra cui scegliere.
+- Puoi seguire anche giocatori **fuori dai tuoi campionati**: in quel caso scrivi lo slug, cioè l'ultima parte dell'indirizzo della pagina del giocatore su Sorare (es. `/segui cristiano-ronaldo-dos-santos-aveiro 30 limited`).
+- Se la carta è anche un affare, ricevi un solo messaggio, quello della watchlist, con il riferimento e lo sconto.
+- La watchlist è di ognuno, non viene toccata da `/reset` e si ferma con `/pausa`. Massimo 50 giocatori.
 
 Slug dei campionati principali: `serie-a-it`, `premier-league-gb-eng`, `laliga-es`, `bundesliga-de`, `ligue-1-fr`, `primeira-liga-pt`.
 

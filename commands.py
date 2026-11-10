@@ -35,6 +35,13 @@ def _ago(ts):
     return f"{minutes // 1440} giorni fa"
 
 
+def _max_label(s):
+    return f"{s.max_price_eur:.2f} €" if s.max_price_eur else "nessun limite"
+
+
+MAX_WATCHLIST = 50
+
+
 def register(bot):
     users = bot.users
 
@@ -79,9 +86,14 @@ def register(bot):
             "/prezzo <i>nome</i> · prezzo di riferimento e ultime vendite\n"
             "/soglia <i>25</i> · sconto minimo in %\n"
             "/minimo <i>2</i> · risparmio minimo in €\n"
+            "/massimo <i>50</i> · prezzo massimo degli affari (0 = nessun limite)\n"
             "/rarita <i>limited rare</i> · rarità da monitorare\n"
             "/campionati <i>serie-a-it ...</i> · campionati da monitorare\n"
-            "/pausa · /riprendi · sospende le notifiche\n"
+            "/pausa · /riprendi · sospende le notifiche\n\n"
+            "<b>Watchlist</b> · avvisi su giocatori precisi, anche se non sono affari\n"
+            "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 €\n"
+            "/lista · giocatori seguiti\n"
+            "/nonseguire <i>2</i> · smetti di seguire (numero da /lista)\n\n"
             "/reset · torna alle impostazioni predefinite"
         )
         if users.is_admin(chat_id):
@@ -107,13 +119,16 @@ def register(bot):
             f"Giocatori monitorati: {len(bot.roster.data['players'])}\n"
             f"Storici pronti: {bot.ready_count()}/{len(bot.all_keys())}"
             f" ({len(bot.stale_keys())} da aggiornare, {bot.ondemand.qsize()} in calcolo al volo)\n"
-            f"Offerte viste: {c['offers']} · affari notificati: {c['deals']}\n"
+            f"Offerte viste: {c['offers']} · affari notificati: {c['deals']}"
+            f" · avvisi watchlist: {c.get('watch', 0)}\n"
             f"Vendite registrate in tempo reale: {c.get('sales', 0)}\n\n"
             f"<b>Le tue impostazioni</b>\n"
             f"{'⏸ Notifiche in pausa' if s.paused else '▶️ Notifiche attive'}\n"
             f"Campionati: {html.escape(', '.join(s.competitions))}\n"
             f"Rarità: {', '.join(s.rarities)}\n"
-            f"Soglia: -{s.discount_percent:g}% e almeno {s.min_discount_eur:.2f} €"
+            f"Soglia: -{s.discount_percent:g}% e almeno {s.min_discount_eur:.2f} €\n"
+            f"Prezzo massimo: {_max_label(s)}\n"
+            f"Watchlist: {len(users.watchlist(chat_id))} giocatori (/lista)"
         )
         if users.is_admin(chat_id):
             text += f"\n\nAccesso Sorare: {bot.client.mode} · utenti abilitati: {len(users.active())} (/utenti)"
@@ -175,6 +190,115 @@ def register(bot):
         return f"✅ Ti avviso solo se risparmi almeno {value:.2f} €."
 
     @for_users
+    async def massimo(chat_id, s, args):
+        try:
+            value = _number(args[0])
+            if value < 0:
+                raise ValueError
+        except (IndexError, ValueError):
+            return (f"Prezzo massimo attuale: {_max_label(s)}.\n"
+                    "Per cambiarlo: <code>/massimo 50</code> · per toglierlo: <code>/massimo 0</code>")
+        s.set("max_price_eur", value)
+        if not value:
+            return "✅ Nessun limite di prezzo: ti avviso per tutti gli affari."
+        return f"✅ Ti avviso solo per gli affari fino a {value:.2f} €."
+
+    # --- watchlist --------------------------------------------------------------------
+
+    async def _find_player(query_words):
+        """(slug, nome) oppure un messaggio di errore se non si trova o è ambiguo."""
+        query = _plain(" ".join(query_words))
+        players = bot.roster.data["players"]
+        as_slug = "-".join(query.split())
+        if as_slug in players:
+            return (as_slug, players[as_slug]), None
+        matches = [slug for slug, name in players.items() if query in _plain(name) or query in slug]
+        exact = [slug for slug in matches if _plain(players[slug]) == query]
+        if len(exact) == 1 or len(matches) == 1:
+            slug = (exact or matches)[0]
+            return (slug, players[slug]), None
+        if matches:
+            shown = "\n".join(f"• {html.escape(players[m])}: <code>{m}</code>" for m in matches[:8])
+            more = f"\n…e altri {len(matches) - 8}" if len(matches) > 8 else ""
+            return None, f"Più giocatori corrispondono, scrivi lo slug:\n{shown}{more}"
+        # Fuori dai campionati monitorati: provo lo slug direttamente su Sorare.
+        player = await bot.client.player(as_slug)
+        if player:
+            return (player["slug"], player["displayName"]), None
+        return None, (f"Nessun giocatore trovato per «{html.escape(' '.join(query_words))}».\n"
+                      "Fuori dai tuoi campionati serve lo slug, cioè l'ultima parte dell'indirizzo della "
+                      "pagina del giocatore su Sorare, es. <code>/segui cristiano-ronaldo-dos-santos-aveiro 30 limited</code>")
+
+    @for_users
+    async def segui(chat_id, s, args):
+        usage = ("Uso: <code>/segui nome prezzo rarità</code>, es. <code>/segui lautaro 15 limited</code>\n"
+                 "Ti avviso appena una sua carta Classic va in vendita a quel prezzo o meno.")
+        rarities = [a.lower().replace("-", "_") for a in args if a.lower().replace("-", "_") in VALID_RARITIES]
+        rest = [a for a in args if a.lower().replace("-", "_") not in VALID_RARITIES]
+        price = None
+        if rest:
+            try:
+                price = _number(rest[-1])
+                rest = rest[:-1]
+            except ValueError:
+                pass
+        if not rest or price is None or price <= 0 or len(rarities) > 1:
+            return usage
+        if rarities:
+            rarity = rarities[0]
+        elif len(s.rarities) == 1:
+            rarity = s.rarities[0]
+        else:
+            return usage + f"\nDimmi la rarità: {', '.join(VALID_RARITIES)}."
+        if len(users.watchlist(chat_id)) >= MAX_WATCHLIST:
+            return f"Hai già {MAX_WATCHLIST} giocatori in watchlist: togline qualcuno con /nonseguire."
+        found, error = await _find_player(rest)
+        if error:
+            return error
+        slug, name = found
+        updated = users.watch_add(chat_id, slug, name, rarity, price)
+        bot._enqueue(f"{slug}|{rarity}")  # storico per mostrare il riferimento negli avvisi
+        verb = "aggiornato" if updated else "aggiunto"
+        return (f"👀 {html.escape(name)} {verb}: ti avviso per le {rarity} Classic fino a {price:.2f} €.\n"
+                "/lista per vedere tutti i giocatori seguiti.")
+
+    @for_users
+    async def lista(chat_id, s, args):
+        items = users.watchlist(chat_id)
+        if not items:
+            return "La watchlist è vuota. Aggiungi un giocatore con <code>/segui lautaro 15 limited</code>"
+        lines = ["👀 <b>Watchlist</b>"]
+        for i, item in enumerate(items, 1):
+            ref = bot.ref_for(f"{item['slug']}|{item['rarity']}")
+            median = (f" · riferimento {ref['median']:.2f} €" if ref and ref.get("median") else "")
+            lines.append(f"{i}. {html.escape(item['name'])} · {item['rarity']} · "
+                         f"fino a <b>{item['price']:.2f} €</b>{median}")
+        lines.append("\n/nonseguire <i>numero</i> per toglierne uno")
+        if s.paused:
+            lines.append("⏸ Notifiche in pausa: anche la watchlist è ferma (/riprendi)")
+        return "\n".join(lines)
+
+    @for_users
+    async def nonseguire(chat_id, s, args):
+        items = users.watchlist(chat_id)
+        if not args:
+            return "Uso: <code>/nonseguire 2</code> (il numero è quello di /lista) o <code>/nonseguire nome</code>"
+        index = None
+        if len(args) == 1 and args[0].isdigit():
+            index = int(args[0]) - 1
+            if not 0 <= index < len(items):
+                return f"Non c'è il numero {args[0]} nella watchlist: guarda /lista."
+        else:
+            query = _plain(" ".join(args))
+            matches = [i for i, it in enumerate(items) if query in _plain(it["name"]) or query in it["slug"]]
+            if len(matches) != 1:
+                return ("Nessun giocatore seguito corrisponde." if not matches else
+                        "Più giocatori corrispondono: usa il numero di /lista.")
+            index = matches[0]
+        item = users.watch_remove(chat_id, index)
+        return f"🗑 Non seguo più {html.escape(item['name'])} ({item['rarity']})."
+
+    @for_users
     async def rarita(chat_id, s, args):
         values = [a.lower().replace("-", "_") for a in args]
         wrong = [v for v in values if v not in VALID_RARITIES]
@@ -225,7 +349,7 @@ def register(bot):
     async def reset(chat_id, s, args):
         s.reset()
         bot.wake.set()
-        return "↩️ Impostazioni riportate a quelle predefinite.\n\n" + await stato(chat_id, "", [])
+        return "↩️ Impostazioni riportate a quelle predefinite (la watchlist resta).\n\n" + await stato(chat_id, "", [])
 
     # --- amministratore -------------------------------------------------------------
 
@@ -245,6 +369,8 @@ def register(bot):
             if u["status"] != "pending":
                 lines.append(f"   {', '.join(s.competitions)} · {', '.join(s.rarities)} · "
                              f"-{s.discount_percent:g}% e {s.min_discount_eur:.2f} €"
+                             + (f" · max {s.max_price_eur:.2f} €" if s.max_price_eur else "")
+                             + f" · watchlist {len(users.watchlist(chat_id))}"
                              + (" · ⏸" if s.paused else ""))
         return "\n".join(lines)
 
@@ -279,6 +405,10 @@ def register(bot):
     n.add_command("prezzo", "Prezzo di riferimento di un giocatore", prezzo)
     n.add_command("soglia", "Sconto minimo in %", soglia)
     n.add_command("minimo", "Risparmio minimo in euro", minimo)
+    n.add_command("massimo", "Prezzo massimo degli affari", massimo)
+    n.add_command("segui", "Segui un giocatore sotto un prezzo", segui)
+    n.add_command("lista", "Giocatori seguiti", lista)
+    n.add_command("nonseguire", "Smetti di seguire un giocatore", nonseguire)
     n.add_command("rarita", "Rarità da monitorare", rarita)
     n.add_command("campionati", "Campionati da monitorare", campionati)
     n.add_command("pausa", "Sospendi le notifiche", pausa)

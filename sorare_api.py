@@ -118,6 +118,10 @@ query PriceHistory($slug: String!, $rarity: Rarity!, $since: ISO8601DateTime!, $
 }
 """
 
+PLAYER_QUERY = """
+query Player($slug: String!) { anyPlayer(slug: $slug) { slug displayName } }
+"""
+
 class SorareClient:
     def __init__(self):
         self.http = httpx.AsyncClient(
@@ -226,6 +230,13 @@ class SorareClient:
             if not conn["pageInfo"]["hasNextPage"]:
                 return players
             after = conn["pageInfo"]["endCursor"]
+
+    async def player(self, slug):
+        """{"slug", "displayName"} di un giocatore qualsiasi, None se lo slug non esiste."""
+        try:
+            return (await self.query(PLAYER_QUERY, {"slug": slug})).get("anyPlayer")
+        except SorareError:
+            return None  # slug inesistente (o Sorare non risponde)
 
     async def market_scan(self, slugs, rarity):
         """Per ogni giocatore con carte in vendita: True se la più economica è Classic."""

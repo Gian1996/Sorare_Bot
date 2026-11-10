@@ -22,6 +22,7 @@ def defaults():
         "discount_percent": float(config.DISCOUNT_PERCENT),
         "min_discount_eur": float(config.MIN_DISCOUNT_EUR),
         "paused": False,
+        "max_price_eur": 0.0,  # 0 = nessun limite
     }
 
 
@@ -108,6 +109,39 @@ class Users:
     def remove(self, chat_id):
         self.data.pop(str(chat_id), None)
         self.save()
+
+    # --- watchlist: giocatori seguiti con un prezzo massimo ------------------------
+    # Sta fuori da "settings" così /reset non la cancella.
+
+    def watchlist(self, chat_id):
+        """[{"slug", "name", "rarity", "price"}] dell'utente, nell'ordine in cui li ha aggiunti."""
+        return self.data[str(chat_id)].setdefault("watchlist", [])
+
+    def watch_add(self, chat_id, slug, name, rarity, price):
+        """Aggiunge o aggiorna (stesso giocatore e rarità). Restituisce True se era già seguito."""
+        items = self.watchlist(chat_id)
+        for item in items:
+            if item["slug"] == slug and item["rarity"] == rarity:
+                item.update(name=name, price=price)
+                self.save()
+                return True
+        items.append({"slug": slug, "name": name, "rarity": rarity, "price": price})
+        self.save()
+        return False
+
+    def watch_remove(self, chat_id, index):
+        item = self.watchlist(chat_id).pop(index)
+        self.save()
+        return item
+
+    def watchers(self, slug, rarity):
+        """[(chat_id, impostazioni, prezzo massimo)] degli utenti abilitati che seguono questa carta."""
+        found = []
+        for chat_id, s in self.active():
+            for item in self.data[chat_id].get("watchlist", []):
+                if item["slug"] == slug and item["rarity"] == rarity:
+                    found.append((chat_id, s, item["price"]))
+        return found
 
     # --- cosa monitorare: l'unione delle scelte di tutti gli utenti -----------------
 
