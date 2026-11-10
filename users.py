@@ -12,6 +12,29 @@ import config
 from storage import JsonStore
 
 VALID_RARITIES = ("limited", "rare", "super_rare", "unique")
+SEASONS = ("classic", "in_season")
+SEASON_LABEL = {"classic": "Classic", "in_season": "In Season"}
+
+
+def parse_season(word):
+    """"classic", "in_season" oppure None: accetta inseason, in-season, is, classiche..."""
+    w = word.lower().replace("-", "").replace("_", "")
+    if w in ("classic", "classica", "classiche", "cl"):
+        return "classic"
+    if w in ("inseason", "is", "stagione"):
+        return "in_season"
+    return None
+
+
+def stat_key(slug, rarity, season="classic"):
+    """Chiave dello storico. Le Classic restano "slug|rarità" come prima, le In Season hanno "|in_season"."""
+    return f"{slug}|{rarity}" if season == "classic" else f"{slug}|{rarity}|{season}"
+
+
+def parse_key(key):
+    """(slug, rarità, stagione) da una chiave di stat_key."""
+    parts = key.split("|")
+    return parts[0], parts[1], parts[2] if len(parts) > 2 else "classic"
 ACTIVE = ("admin", "approved")
 
 
@@ -19,6 +42,7 @@ def defaults():
     return {
         "competitions": list(config.COMPETITIONS),
         "rarities": list(config.RARITIES),
+        "seasons": list(config.SEASONS),
         "discount_percent": float(config.DISCOUNT_PERCENT),
         "min_discount_eur": float(config.MIN_DISCOUNT_EUR),
         "paused": False,
@@ -114,18 +138,21 @@ class Users:
     # Sta fuori da "settings" così /reset non la cancella.
 
     def watchlist(self, chat_id):
-        """[{"slug", "name", "rarity", "price"}] dell'utente, nell'ordine in cui li ha aggiunti."""
+        """[{"slug", "name", "rarity", "season", "price"}] dell'utente, nell'ordine in cui li ha aggiunti.
+
+        "season" manca nelle voci aggiunte prima delle In Season: vuol dire "classic".
+        """
         return self.data[str(chat_id)].setdefault("watchlist", [])
 
-    def watch_add(self, chat_id, slug, name, rarity, price):
-        """Aggiunge o aggiorna (stesso giocatore e rarità). Restituisce True se era già seguito."""
+    def watch_add(self, chat_id, slug, name, rarity, season, price):
+        """Aggiunge o aggiorna (stesso giocatore, rarità e stagione). Restituisce True se era già seguito."""
         items = self.watchlist(chat_id)
         for item in items:
-            if item["slug"] == slug and item["rarity"] == rarity:
-                item.update(name=name, price=price)
+            if item["slug"] == slug and item["rarity"] == rarity and item.get("season", "classic") == season:
+                item.update(name=name, price=price, season=season)
                 self.save()
                 return True
-        items.append({"slug": slug, "name": name, "rarity": rarity, "price": price})
+        items.append({"slug": slug, "name": name, "rarity": rarity, "season": season, "price": price})
         self.save()
         return False
 
@@ -134,12 +161,13 @@ class Users:
         self.save()
         return item
 
-    def watchers(self, slug, rarity):
+    def watchers(self, slug, rarity, season):
         """[(chat_id, impostazioni, prezzo massimo)] degli utenti abilitati che seguono questa carta."""
         found = []
         for chat_id, s in self.active():
             for item in self.data[chat_id].get("watchlist", []):
-                if item["slug"] == slug and item["rarity"] == rarity:
+                if (item["slug"] == slug and item["rarity"] == rarity
+                        and item.get("season", "classic") == season):
                     found.append((chat_id, s, item["price"]))
         return found
 
@@ -150,3 +178,6 @@ class Users:
 
     def all_rarities(self):
         return list(dict.fromkeys(r for _, s in self.active() for r in s.rarities))
+
+    def all_seasons(self):
+        return list(dict.fromkeys(x for _, s in self.active() for x in s.seasons))

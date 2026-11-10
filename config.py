@@ -43,6 +43,8 @@ COMPETITIONS = [
 
 # Rarità da monitorare: "limited", "rare", "super_rare", "unique".
 RARITIES = ["limited", "rare"]
+# "classic" (stagioni passate) e/o "in_season" (stagione in corso): hanno sempre riferimenti separati.
+SEASONS = ["classic"]
 
 # Nota: campionati, rarità e soglie si possono cambiare anche da Telegram (/aiuto).
 # I valori cambiati da Telegram vincono su questi; /reset torna a quelli di config.py.

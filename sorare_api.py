@@ -106,10 +106,11 @@ query Market($slugs: [String!], $rarity: Rarity) {
 MARKET_BATCH = 100  # massimo consentito da Sorare per players(slugs:)
 
 PRICE_HISTORY_QUERY = """
-query PriceHistory($slug: String!, $rarity: Rarity!, $since: ISO8601DateTime!, $last: Int!, $before: String) {
+query PriceHistory($slug: String!, $rarity: Rarity!, $season: SeasonEligibility!, $since: ISO8601DateTime!,
+                   $last: Int!, $before: String) {
   anyPlayer(slug: $slug) {
     ... on Player {
-      tokenPrices(rarity: $rarity, seasonEligibility: CLASSIC, since: $since, last: $last, before: $before) {
+      tokenPrices(rarity: $rarity, seasonEligibility: $season, since: $since, last: $last, before: $before) {
         nodes { date amounts { eurCents usdCents wei } }
         pageInfo { hasPreviousPage startCursor }
       }
@@ -279,14 +280,15 @@ class SorareClient:
         conn = data["tokens"]["liveSingleSaleOffers"]
         return conn["nodes"], conn["pageInfo"]
 
-    async def price_history(self, slug, rarity, since_iso, page_size):
-        """Vendite Classic più recenti fino a `since_iso`, al massimo HISTORY_MAX_SALES."""
+    async def price_history(self, slug, rarity, since_iso, page_size, season="classic"):
+        """Vendite più recenti fino a `since_iso` (solo Classic o solo In Season), al massimo HISTORY_MAX_SALES."""
         sales, before = [], None
         for _ in range(config.HISTORY_MAX_PAGES):
             if len(sales) >= config.HISTORY_MAX_SALES:
                 break  # per una mediana affidabile bastano le vendite più recenti
             data = await self.query(PRICE_HISTORY_QUERY, {
-                "slug": slug, "rarity": rarity, "since": since_iso, "last": page_size, "before": before,
+                "slug": slug, "rarity": rarity, "season": season.upper(), "since": since_iso,
+                "last": page_size, "before": before,
             })
             conn = (data.get("anyPlayer") or {}).get("tokenPrices")
             if not conn:

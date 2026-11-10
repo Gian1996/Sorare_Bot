@@ -13,7 +13,7 @@ import bilancio as report
 import config
 from pricing import ago
 from sorare_api import SorareError
-from users import VALID_RARITIES
+from users import SEASON_LABEL, SEASONS, VALID_RARITIES, parse_season, stat_key
 
 NOT_ALLOWED = "🔒 Non sei abilitato. Scrivi /start per chiedere l'accesso."
 
@@ -34,6 +34,10 @@ def _ago(ts):
     if minutes < 48 * 60:
         return f"{minutes // 60} ore fa"
     return f"{minutes // 1440} giorni fa"
+
+
+def _seasons_label(seasons):
+    return " e ".join(SEASON_LABEL[x] for x in seasons)
 
 
 def _max_label(s):
@@ -89,11 +93,12 @@ def register(bot):
             "/minimo <i>2</i> · risparmio minimo in €\n"
             "/massimo <i>50</i> · prezzo massimo degli affari (0 = nessun limite)\n"
             "/rarita <i>limited rare</i> · rarità da monitorare\n"
+            "/stagioni <i>classic inseason</i> · Classic, In Season o entrambe\n"
             "/campionati <i>serie-a-it ...</i> · campionati da monitorare\n"
             "/pausa · /riprendi · sospende le notifiche\n"
             "/bilancio <i>7</i> · quanti avvisi sono stati comprati davvero e quanto in fretta\n\n"
             "<b>Watchlist</b> · avvisi su giocatori precisi, anche se non sono affari\n"
-            "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 €\n"
+            "/segui <i>lautaro 15 limited</i> · avvisami sotto i 15 € (aggiungi <i>inseason</i> per le In Season)\n"
             "/lista · giocatori seguiti\n"
             "/nonseguire <i>2</i> · smetti di seguire (numero da /lista)\n\n"
             "/reset · torna alle impostazioni predefinite"
@@ -127,7 +132,7 @@ def register(bot):
             f"<b>Le tue impostazioni</b>\n"
             f"{'⏸ Notifiche in pausa' if s.paused else '▶️ Notifiche attive'}\n"
             f"Campionati: {html.escape(', '.join(s.competitions))}\n"
-            f"Rarità: {', '.join(s.rarities)}\n"
+            f"Rarità: {', '.join(s.rarities)} · {_seasons_label(s.seasons)}\n"
             f"Soglia: -{s.discount_percent:g}% e almeno {s.min_discount_eur:.2f} €\n"
             f"Prezzo massimo: {_max_label(s)}\n"
             f"Watchlist: {len(users.watchlist(chat_id))} giocatori (/lista)"
@@ -149,15 +154,14 @@ def register(bot):
         lines = []
         for slug in matches:
             lines.append(f"⚽ <b>{html.escape(players[slug])}</b>")
-            for rarity in s.rarities:
-                key = f"{slug}|{rarity}"
+            for rarity, season in ((r, x) for r in s.rarities for x in s.seasons):
+                key = stat_key(slug, rarity, season)
                 entry = bot.stats.data.get(key)
                 ref = bot.ref_for(key)
-                on_sale = slug in bot.market.data["on_sale"].get(rarity, {})
-                if not entry and not on_sale:
-                    lines.append(f"   {rarity}: nessuna carta in vendita (lo calcolo al primo annuncio)")
-                elif not entry:
-                    lines.append(f"   {rarity}: in calcolo")
+                rarity = f"{rarity} {SEASON_LABEL[season]}"
+                if not entry:
+                    bot._enqueue(key)
+                    lines.append(f"   {rarity}: lo scarico adesso, riprova tra qualche secondo")
                 elif ref is None:
                     lines.append(f"   {rarity}: storico non disponibile al momento")
                 elif ref["count"] < config.MIN_SALES:
@@ -233,10 +237,17 @@ def register(bot):
 
     @for_users
     async def segui(chat_id, s, args):
-        usage = ("Uso: <code>/segui nome prezzo rarità</code>, es. <code>/segui lautaro 15 limited</code>\n"
-                 "Ti avviso appena una sua carta Classic va in vendita a quel prezzo o meno.")
+        usage = ("Uso: <code>/segui nome prezzo rarità [inseason]</code>, es. <code>/segui lautaro 15 limited</code>\n"
+                 "Ti avviso appena una sua carta va in vendita a quel prezzo o meno. "
+                 "Senza <i>inseason</i> seguo le Classic.")
+        args = " ".join(args).lower().replace("in season", "inseason").split()
+        seasons = [parse_season(a) for a in args if parse_season(a)]
+        args = [a for a in args if not parse_season(a)]
         rarities = [a.lower().replace("-", "_") for a in args if a.lower().replace("-", "_") in VALID_RARITIES]
         rest = [a for a in args if a.lower().replace("-", "_") not in VALID_RARITIES]
+        if len(set(seasons)) > 1:
+            return usage + "\nUna stagione per volta: per seguirle entrambe usa /segui due volte."
+        season = seasons[0] if seasons else "classic"
         price = None
         if rest:
             try:
@@ -258,10 +269,11 @@ def register(bot):
         if error:
             return error
         slug, name = found
-        updated = users.watch_add(chat_id, slug, name, rarity, price)
-        bot._enqueue(f"{slug}|{rarity}")  # storico per mostrare il riferimento negli avvisi
+        updated = users.watch_add(chat_id, slug, name, rarity, season, price)
+        bot._enqueue(stat_key(slug, rarity, season))  # storico per mostrare il riferimento negli avvisi
         verb = "aggiornato" if updated else "aggiunto"
-        return (f"👀 {html.escape(name)} {verb}: ti avviso per le {rarity} Classic fino a {price:.2f} €.\n"
+        return (f"👀 {html.escape(name)} {verb}: ti avviso per le {rarity} {SEASON_LABEL[season]} "
+                f"fino a {price:.2f} €.\n"
                 "/lista per vedere tutti i giocatori seguiti.")
 
     @for_users
@@ -271,9 +283,10 @@ def register(bot):
             return "La watchlist è vuota. Aggiungi un giocatore con <code>/segui lautaro 15 limited</code>"
         lines = ["👀 <b>Watchlist</b>"]
         for i, item in enumerate(items, 1):
-            ref = bot.ref_for(f"{item['slug']}|{item['rarity']}")
+            season = item.get("season", "classic")
+            ref = bot.ref_for(stat_key(item["slug"], item["rarity"], season))
             median = (f" · riferimento {ref['median']:.2f} €" if ref and ref.get("median") else "")
-            lines.append(f"{i}. {html.escape(item['name'])} · {item['rarity']} · "
+            lines.append(f"{i}. {html.escape(item['name'])} · {item['rarity']} {SEASON_LABEL[season]} · "
                          f"fino a <b>{item['price']:.2f} €</b>{median}")
         lines.append("\n/nonseguire <i>numero</i> per toglierne uno")
         if s.paused:
@@ -298,7 +311,8 @@ def register(bot):
                         "Più giocatori corrispondono: usa il numero di /lista.")
             index = matches[0]
         item = users.watch_remove(chat_id, index)
-        return f"🗑 Non seguo più {html.escape(item['name'])} ({item['rarity']})."
+        return (f"🗑 Non seguo più {html.escape(item['name'])} "
+                f"({item['rarity']} {SEASON_LABEL[item.get('season', 'classic')]}).")
 
     @for_users
     async def bilancio(chat_id, s, args):
@@ -332,6 +346,23 @@ def register(bot):
         bot.wake.set()
         return (f"✅ Monitoro: {', '.join(s.rarities)}.\n"
                 f"Gli storici nuovi si calcolano in background (/stato per l'avanzamento).")
+
+    @for_users
+    async def stagioni(chat_id, s, args):
+        words = " ".join(args).lower().replace("in season", "inseason").split()
+        values = [parse_season(w) for w in words]
+        if not values or None in values:
+            return (f"Stagioni attuali: {_seasons_label(s.seasons)}.\n"
+                    "Per cambiarle: <code>/stagioni classic</code>, <code>/stagioni inseason</code> "
+                    "o <code>/stagioni classic inseason</code>.\n"
+                    "Le due hanno sempre prezzi di riferimento separati.")
+        s.set("seasons", [x for x in SEASONS if x in values])
+        bot.wake.set()
+        extra = ""
+        if "in_season" in s.seasons:
+            extra = ("\nGli storici In Season si preparano per chi ha una In Season come carta più economica; "
+                     "per gli altri li scarico al volo alla prima offerta.")
+        return f"✅ Monitoro le carte {_seasons_label(s.seasons)}.{extra}"
 
     @for_users
     async def campionati(chat_id, s, args):
@@ -391,6 +422,7 @@ def register(bot):
                          f"(<code>{chat_id}</code>)")
             if u["status"] != "pending":
                 lines.append(f"   {', '.join(s.competitions)} · {', '.join(s.rarities)} · "
+                             f"{_seasons_label(s.seasons)} · "
                              f"-{s.discount_percent:g}% e {s.min_discount_eur:.2f} €"
                              + (f" · max {s.max_price_eur:.2f} €" if s.max_price_eur else "")
                              + f" · watchlist {len(users.watchlist(chat_id))}"
@@ -434,6 +466,7 @@ def register(bot):
     n.add_command("nonseguire", "Smetti di seguire un giocatore", nonseguire)
     n.add_command("bilancio", "Quanti avvisi sono stati comprati", bilancio)
     n.add_command("rarita", "Rarità da monitorare", rarita)
+    n.add_command("stagioni", "Classic, In Season o entrambe", stagioni)
     n.add_command("campionati", "Campionati da monitorare", campionati)
     n.add_command("pausa", "Sospendi le notifiche", pausa)
     n.add_command("riprendi", "Riattiva le notifiche", riprendi)

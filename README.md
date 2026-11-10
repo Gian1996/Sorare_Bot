@@ -1,6 +1,6 @@
 # SorareBot
 
-Bot Telegram che controlla il mercato di Sorare **in tempo reale** e ti avvisa quando qualcuno mette in vendita una carta **Classic** a un prezzo molto più basso del solito.
+Bot Telegram che controlla il mercato di Sorare **in tempo reale** e ti avvisa quando qualcuno mette in vendita una carta a un prezzo molto più basso del solito. Di default solo **Classic**; con `/stagioni` anche **In Season**.
 
 ## Come avviarlo
 
@@ -24,9 +24,10 @@ cp script/.env.example script/.env      # poi compila .env (token Telegram, API 
 ## Come funziona
 
 1. **Giocatori**: per ogni campionato scelto (di default Serie A, Premier League, LaLiga, Bundesliga, Ligue 1) scarica squadre e rose. Si aggiornano da sole ogni 24 ore.
-2. **Prezzo di riferimento**: per ogni giocatore e rarità salva le ultime vendite Classic (fino a 100, negli ultimi 90 giorni) e ne calcola la **mediana pesata**: il peso di una vendita si dimezza ogni 3 giorni (oggi 1, dopo 3 giorni 0,5, dopo 6 giorni 0,25...). Così un calo recente, per esempio un infortunio, conta subito. Le carte In Season non vengono mai mescolate con le Classic.
+2. **Prezzo di riferimento**: per ogni giocatore, rarità e stagione (Classic o In Season) salva le ultime vendite (fino a 100, negli ultimi 90 giorni) e ne calcola la **mediana pesata**: il peso di una vendita si dimezza ogni 3 giorni (oggi 1, dopo 3 giorni 0,5, dopo 6 giorni 0,25...). Così un calo recente, per esempio un infortunio, conta subito. Classic e In Season hanno **sempre riferimenti separati**: non vengono mai mescolate.
    - Le vendite nuove arrivano **in tempo reale**: il riferimento si aggiorna pochi secondi dopo ogni vendita. Lo storico completo si riscarica ogni 24 ore.
    - Gli storici vengono preparati in anticipo solo per i giocatori che hanno carte in vendita (circa l'80%), a partire da quelli la cui carta più economica è Classic. Al primo avvio servono circa 30 minuti.
+   - In Season: Sorare dice solo qual è la carta più economica in vendita, quindi lo storico In Season si prepara in anticipo solo per chi ha una In Season come carta più economica. Per gli altri si scarica al volo alla prima offerta (qualche secondo).
    - Se arriva un'offerta per un giocatore senza storico, il bot lo scarica al volo in pochi secondi e poi valuta l'offerta: anche durante il primo avvio non si perdono affari.
 3. **Tempo reale**: resta collegato al websocket di Sorare e riceve ogni nuova offerta di vendita entro circa un secondo. Se la connessione cade si ricollega da solo e, finché è scollegato, controlla le offerte ogni minuto. Non usa sempre il controllo periodico perché il flusso periodico di Sorare a volte è in ritardo anche di un'ora.
 4. **Notifica**: ti scrive su Telegram, con le ultime vendite e il link alla carta, solo se tutte queste condizioni sono vere:
@@ -47,11 +48,12 @@ Prezzi in ETH e USD vengono convertiti in euro con il cambio fornito da Sorare.
 | `/minimo 2` | Risparmio minimo in € |
 | `/massimo 50` | Prezzo massimo degli affari (`/massimo 0` = nessun limite) |
 | `/rarita limited rare` | Rarità da monitorare (`limited`, `rare`, `super_rare`, `unique`) |
+| `/stagioni classic inseason` | Classic, In Season o entrambe (di default solo Classic) |
 | `/campionati serie-a-it laliga-es` | Campionati da monitorare (slug Sorare) |
 | `/pausa` · `/riprendi` | Sospende o riattiva le notifiche |
 | `/bilancio 7` | Quanti avvisi sono stati comprati davvero e quanto in fretta |
 | `/reset` | Torna alle impostazioni di `config.py` (la watchlist resta) |
-| `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno |
+| `/segui lautaro 15 limited` | Watchlist: avvisami se una sua carta Classic va in vendita a 15 € o meno (`inseason` in fondo per le In Season) |
 | `/lista` | Giocatori seguiti, con il loro prezzo di riferimento |
 | `/nonseguire 2` | Smetti di seguire un giocatore (numero da `/lista`, o il nome) |
 
@@ -68,8 +70,9 @@ L'esito di ogni offerta viene chiesto a Sorare, quindi è giusto anche per le of
 
 ### Watchlist
 
-Con `/segui` il bot ti avvisa per un giocatore preciso appena una sua carta Classic va in vendita sotto il prezzo che scegli, **anche se non è un affare** rispetto alla mediana: per esempio se ti serve per la squadra e sai già quanto vuoi spendere.
+Con `/segui` il bot ti avvisa per un giocatore preciso appena una sua carta va in vendita sotto il prezzo che scegli, **anche se non è un affare** rispetto alla mediana: per esempio se ti serve per la squadra e sai già quanto vuoi spendere.
 
+- Di default segue le Classic; per le In Season aggiungi `inseason`: `/segui haaland 40 limited inseason`. Per seguirle entrambe usa `/segui` due volte, con due prezzi diversi.
 - La rarità si può omettere se ne monitori una sola (es. solo `limited`).
 - Se il nome è ambiguo (`/segui lautaro`), il bot ti mostra gli slug tra cui scegliere.
 - Puoi seguire anche giocatori **fuori dai tuoi campionati**: in quel caso scrivi lo slug, cioè l'ultima parte dell'indirizzo della pagina del giocatore su Sorare (es. `/segui cristiano-ronaldo-dos-santos-aveiro 30 limited`).
