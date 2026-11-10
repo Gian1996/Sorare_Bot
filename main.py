@@ -19,6 +19,9 @@ from users import SEASON_LABEL, Users, parse_key, stat_key
 log = logging.getLogger("sorarebot")
 
 RATES_REFRESH_SECONDS = 600
+# Versione degli storici: si alza quando cambia cosa contiene uno storico, così vengono riscaricati.
+# 2 = solo vendite a prezzo fisso tra manager (prima c'erano anche aste, Sorare e offerte d'acquisto).
+STATS_VERSION = 2
 RARITY_LABEL = {"limited": "Limited 🟡", "rare": "Rare 🔴", "super_rare": "Super Rare 🔵", "unique": "Unique ⚫"}
 CLOSED_LABEL = {"accepted": "✅ Venduta", "cancelled": "❌ Ritirata dal venditore", "ended": "⌛ Scaduta"}
 
@@ -42,6 +45,11 @@ class SniperBot:
         self.stats = JsonStore(path("stats.json"), {}, compact=True)
         # Il vecchio formato salvava solo la mediana, senza le vendite: va ricalcolato.
         self.stats.data = {k: v for k, v in self.stats.data.items() if "sales" in v or "error" in v}
+        outdated = [v for v in self.stats.data.values() if v.get("v") != STATS_VERSION]
+        for entry in outdated:
+            entry["updated_at"] = 0  # da riscaricare; intanto il vecchio riferimento resta usabile
+        if outdated:
+            log.info("Storici da riscaricare con le sole vendite tra manager: %d", len(outdated))
         self.stats_dirty = False
         self.seen_sales = {}
         self._player_competitions = None  # id offerte vendute già registrate (il websocket può ripeterle)
@@ -205,7 +213,7 @@ class SniperBot:
             log.warning("Storico di %s non disponibile: %s", slug, e)
             old = self.stats.data.get(key, {})
             self.stats.data[key] = {**old, "updated_at": now_ts()} if "sales" in old else \
-                {"error": str(e)[:200], "updated_at": now_ts()}
+                {"error": str(e)[:200], "updated_at": now_ts(), "v": STATS_VERSION}
             self.pending.pop(key, None)
             return False
         finally:
@@ -220,7 +228,8 @@ class SniperBot:
         newest = max((ts for ts, _ in sales), default=0)
         sales += [s for s in self.stats.data.get(key, {}).get("sales", []) if s[0] > newest]
         sales.sort(reverse=True)
-        self.stats.data[key] = {"sales": sales[:config.HISTORY_MAX_SALES], "updated_at": now_ts()}
+        self.stats.data[key] = {"sales": sales[:config.HISTORY_MAX_SALES], "updated_at": now_ts(),
+                                "v": STATS_VERSION}
         for offer in self.pending.pop(key, []):
             await self.handle_offer(offer, retry=True)
         return True
@@ -288,7 +297,12 @@ class SniperBot:
 
     @staticmethod
     def _single_card(offer):
-        """(carta, stagione) se l'offerta è una singola carta in vendita per soldi, altrimenti (None, None)."""
+        """(carta, stagione) se l'offerta è una singola carta messa sul mercato da un manager per soldi.
+
+        Le offerte private tra manager (DIRECT_OFFER) e le offerte d'acquisto non sono annunci sul mercato.
+        """
+        if offer.get("type", "SINGLE_SALE_OFFER") != "SINGLE_SALE_OFFER":
+            return None, None
         cards = offer["senderSide"]["anyCards"]
         if len(cards) != 1 or offer["receiverSide"]["anyCards"]:
             return None, None  # pacchetti di più carte o scambi carta-contro-carta

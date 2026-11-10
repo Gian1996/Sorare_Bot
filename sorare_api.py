@@ -64,6 +64,7 @@ query TeamPlayers($slug: String!, $after: String) {
 # Campi di un'offerta, uguali per il controllo periodico e per il tempo reale.
 OFFER_FIELDS = """
   id
+  type
   status
   createdAt
   senderSide {
@@ -105,13 +106,25 @@ query Market($slugs: [String!], $rarity: Rarity) {
 """
 MARKET_BATCH = 100  # massimo consentito da Sorare per players(slugs:)
 
+# Lo storico di Sorare mescola: vendite a prezzo fisso tra manager (SINGLE_SALE_OFFER), offerte
+# d'acquisto accettate (SINGLE_BUY_OFFER, di solito al ribasso), aste e vendite dirette di Sorare
+# (queste due solo In Season). Il riferimento usa solo le vendite a prezzo fisso tra manager:
+# è lo stesso tipo di vendita che il bot controlla.
+MARKET_SALE = "SINGLE_SALE_OFFER"
+
+
+def is_market_sale(node):
+    deal = node.get("deal") or {}
+    return deal.get("__typename") == "TokenOffer" and deal.get("type") == MARKET_SALE
+
+
 PRICE_HISTORY_QUERY = """
 query PriceHistory($slug: String!, $rarity: Rarity!, $season: SeasonEligibility!, $since: ISO8601DateTime!,
                    $last: Int!, $before: String) {
   anyPlayer(slug: $slug) {
     ... on Player {
       tokenPrices(rarity: $rarity, seasonEligibility: $season, since: $since, last: $last, before: $before) {
-        nodes { date amounts { eurCents usdCents wei } }
+        nodes { date amounts { eurCents usdCents wei } deal { __typename ... on TokenOffer { type } } }
         pageInfo { hasPreviousPage startCursor }
       }
     }
@@ -281,7 +294,10 @@ class SorareClient:
         return conn["nodes"], conn["pageInfo"]
 
     async def price_history(self, slug, rarity, since_iso, page_size, season="classic"):
-        """Vendite più recenti fino a `since_iso` (solo Classic o solo In Season), al massimo HISTORY_MAX_SALES."""
+        """Vendite a prezzo fisso tra manager più recenti fino a `since_iso` (solo Classic o solo In Season).
+
+        Al massimo HISTORY_MAX_SALES: le altre vendite (aste, Sorare, offerte d'acquisto) non contano.
+        """
         sales, before = [], None
         for _ in range(config.HISTORY_MAX_PAGES):
             if len(sales) >= config.HISTORY_MAX_SALES:
@@ -293,7 +309,7 @@ class SorareClient:
             conn = (data.get("anyPlayer") or {}).get("tokenPrices")
             if not conn:
                 break
-            sales.extend(conn["nodes"])
+            sales.extend(node for node in conn["nodes"] if is_market_sale(node))
             if not conn["pageInfo"]["hasPreviousPage"]:
                 break
             before = conn["pageInfo"]["startCursor"]
